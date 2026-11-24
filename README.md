@@ -1,3 +1,5 @@
+> Latest translations / 翻訳の最新版: [0-LATEST-TRANSLATIONS.md](0-LATEST-TRANSLATIONS.md)
+
 # 2MFastAPI
 
 **日本語**: Flask・Django(DRF を含む)・FastAPI で組まれたプロジェクトを、使っているライブラリの組み合わせ(SQLAlchemy・marshmallow・JWT・DRF・Flask-Login など)ごと **MFastAPI**(FastAPI 互換・Rust 高速化、`mfastapi.accelerate(app)`)へ自動変換するツール。Flask / Django の変換は [2FastAPI](https://github.com/aon-co-jp/2FastAPI) を土台にし、FastAPI のプロジェクトはコードを変えずに `run_mfastapi.py`(MFastAPI が無ければ素の FastAPI として動く)を足します。
