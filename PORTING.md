@@ -33,3 +33,7 @@
 ## 2026-11-25 追記: MFastAPI は Mojo から使えること / Addendum: MFastAPI must be usable from Mojo
 **日本語**: MFastAPI は **Mojo から使用できる仕様**を保つ(Python 構文・Rust 実装・Mojo 対応、Windows では RMojo の `compat/wsl-bridge` 経由で WSL 上の Mojo を使う)。2MFastAPI の変換結果も Mojo から使えること。現状: `mojo/` は参照実装で、段階B・Cのサーバーは実験的。Mojo からの呼び出しの実機確認は、確認済みの範囲だけを「確認済み」と書く。11:30 まで確認なしで自動で進める。
 **English**: MFastAPI keeps the **specification of being usable from Mojo** (Python syntax, Rust core, Mojo support; on Windows the real Mojo in WSL is driven through RMojo's `compat/wsl-bridge`). Output of 2MFastAPI must be usable from Mojo too. Current state: `mojo/` is a reference implementation and its stage B/C servers are experimental. Only what was actually run is called "verified". Continue automatically without asking until 11:30.
+
+## 2026-11-25 Laravel ルート変換 / Laravel route conversion
+**日本語**: `src/tomfastapi/laravel.py` と `laravel` サブコマンドを追加。試験4件成功、サンプルを uvicorn(素の FastAPI)で起動し curl で確認済み。未了: コントローラー(`[Controller::class, 'm']`)、`Route::group`/`prefix`、`"$var"` 展開、MFastAPI の accelerate 適用での起動確認。
+**English**: Added `src/tomfastapi/laravel.py` and the `laravel` subcommand. 4 tests pass; the sample ran under uvicorn (plain FastAPI) and was checked with curl. Open: controllers, `Route::group`/`prefix`, `"$var"` interpolation, a run with MFastAPI accelerate applied.
