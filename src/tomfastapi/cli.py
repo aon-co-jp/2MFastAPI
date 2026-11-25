@@ -24,7 +24,15 @@ def main(argv=None) -> int:
     a = sub.add_parser("auto", help="convert every project found below a directory")
     a.add_argument("path")
     a.add_argument("-o", "--output", help="destination root (default: <path>-mfastapi)")
+    lv = sub.add_parser("laravel", help="convert Laravel routes/web.php and routes/api.php")
+    lv.add_argument("path")
+    lv.add_argument("-o", "--output", required=True)
     ns = ap.parse_args(argv)
+    if ns.cmd == "laravel":
+        from .laravel import convert_laravel
+        ok, todo = convert_laravel(ns.path, ns.output)
+        print("wrote %s (%d routes translated, %d TODO -> 501)" % (os.path.join(ns.output, "main.py"), ok, todo), file=sys.stderr)
+        return 0
     if ns.cmd == "scan":
         ps = scan(ns.path)
         if ns.json:
