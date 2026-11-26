@@ -175,3 +175,7 @@ Route::post('/users/{user}/roles/{role}/grant', function (User $user, $role) {
 Route::get('/pivot', function () {
     return DB::table('role_user')->get();
 });
+
+Route::get('/users/{user}/roles-granted', function (User $user) {
+    return $user->roles()->withPivot('granted_by')->get();
+});

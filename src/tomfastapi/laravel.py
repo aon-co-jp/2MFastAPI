@@ -724,6 +724,14 @@ def _expr(e: str, ctx: Ctx) -> Optional[Tuple[str, str]]:
                 return None
             ctx.uses_body = True
             return "_validate(_body, %s)" % rules, "json"
+    m = re.fullmatch(r"\$(\w+)->(\w+)\(\)->withPivot\((.*?)\)->get\(\)", e, re.S)
+    if m and m.group(1) in ctx.vars:
+        hit = ctx.proj.relations.get((ctx.var_model.get(m.group(1)), m.group(2)))
+        cols = re.findall(r"""['"](\w+)['"]""", m.group(3))
+        if hit and hit[0] == "belongsToMany" and cols:
+            ctx.uses_db = True
+            pv, f1, f2 = hit[2].split("|")
+            return "_db_many_pivot(%r, %r, %r, %r, %s['id'], %r)" % (ctx.proj.table_of(hit[1]), pv, f1, f2, m.group(1), cols), "json"
     m = re.fullmatch(r"\$(\w+)->(\w+)\(\)->(attach|detach|sync)\((.*)\)", e, re.S)
     if m and m.group(1) in ctx.vars:
         hit = ctx.proj.relations.get((ctx.var_model.get(m.group(1)), m.group(2)))
@@ -1177,6 +1185,16 @@ def _db_find(name, key):
 def _db_many(target_table, pivot, fk, rfk, key):
     tt, pv = _t(target_table), _t(pivot)
     return _rows(select(tt).select_from(tt.join(pv, pv.c[rfk] == tt.c["id"])).where(pv.c[fk] == key))
+
+
+def _db_many_pivot(target_table, pivot, fk, rfk, key, cols):
+    tt, pv = _t(target_table), _t(pivot)
+    q = select(tt, *[pv.c[k].label("_pv_" + k) for k in cols if k in pv.c]).select_from(tt.join(pv, pv.c[rfk] == tt.c["id"])).where(pv.c[fk] == key)
+    out = []
+    for r in _rows(q):
+        out.append({**{k: v for k, v in r.items() if not k.startswith("_pv_")},
+                    "pivot": {k[4:]: v for k, v in r.items() if k.startswith("_pv_")}})
+    return out
 
 
 def _with(res, specs):
