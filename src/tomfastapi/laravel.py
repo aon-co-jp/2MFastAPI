@@ -155,9 +155,17 @@ class Project:
                 self.model_tables[cm.group(1)] = tm.group(1)
             if cm:
                 self.models.append(cm.group(1))
-                for rm in re.finditer(r"function\s+(\w+)\s*\(\s*\)\s*(?::\s*[\w\\]+\s*)?\{\s*return\s+\$this->(hasMany|hasOne|belongsTo)"
-                                      r"\(\s*\\?([\w\\]+)::class\s*(?:,\s*['\"](\w+)['\"])?", src):
-                    self.relations[(cm.group(1), rm.group(1))] = (rm.group(2), rm.group(3).split("\\")[-1], rm.group(4))
+                for rm in re.finditer(r"function\s+(\w+)\s*\(\s*\)\s*(?::\s*[\w\\]+\s*)?\{\s*return\s+\$this->(hasMany|hasOne|belongsToMany|belongsTo)"
+                                      r"\(\s*\\?([\w\\]+)::class\s*(?:,\s*['\"](\w+)['\"])?(?:,\s*['\"](\w+)['\"])?(?:,\s*['\"](\w+)['\"])?", src):
+                    kind, target = rm.group(2), rm.group(3).split("\\")[-1]
+                    if kind == "belongsToMany":
+                        snake = lambda n: re.sub(r"(?<!^)([A-Z])", r"_\1", n).lower()
+                        pivot = rm.group(4) or "_".join(sorted([snake(cm.group(1)), snake(target)]))
+                        fk = rm.group(5) or snake(cm.group(1)) + "_id"
+                        rfk = rm.group(6) or snake(target) + "_id"
+                        self.relations[(cm.group(1), rm.group(1))] = (kind, target, "%s|%s|%s" % (pivot, fk, rfk))
+                    else:
+                        self.relations[(cm.group(1), rm.group(1))] = (kind, target, rm.group(4))
         for _p, src in self._php_files("database", "migrations"):
             for sm in re.finditer(r"Schema::create\s*\(\s*['\"](\w+)['\"]\s*,\s*function\s*\([^)]*\)\s*\{", src):
                 body, _ = _body(src, sm.end())
@@ -490,7 +498,9 @@ def _db_expr_core(e: str, ctx: "Ctx") -> Optional[Tuple[str, str]]:
                 if not hit:
                     return None
                 kind, target, fk = hit
-                if kind != "belongsTo":
+                if kind == "belongsToMany":
+                    pass
+                elif kind != "belongsTo":
                     fk = fk or re.sub(r"(?<!^)([A-Z])", r"_", m.group(1)).lower() + "_id"
                 else:
                     fk = fk or rel + "_id"
@@ -567,6 +577,9 @@ def _relation(var: str, rel: str, ctx: "Ctx") -> Optional[Tuple[str, str]]:
     tt = ctx.proj.table_of(target)
     if kind == "belongsTo":
         return "_db_find(%r, %s[%r])" % (tt, var, fk or rel + "_id"), "json"
+    if kind == "belongsToMany":
+        pv, f1, f2 = fk.split("|")
+        return "_db_many(%r, %r, %r, %r, %s['id'])" % (tt, pv, f1, f2, var), "json"
     fk = fk or re.sub(r"(?<!^)([A-Z])", r"_\1", mdl).lower() + "_id"
     q = "_Q(%r, [(%r, '=', %s['id'])], [], None)" % (tt, fk, var)
     return ("_db_get(%s)" if kind == "hasMany" else "_db_first(%s)") % q, "json"
@@ -1090,12 +1103,20 @@ def _db_find(name, key):
     return r[0] if r else None
 
 
+def _db_many(target_table, pivot, fk, rfk, key):
+    tt, pv = _t(target_table), _t(pivot)
+    return _rows(select(tt).select_from(tt.join(pv, pv.c[rfk] == tt.c["id"])).where(pv.c[fk] == key))
+
+
 def _with(res, specs):
     rows = [res] if isinstance(res, dict) else (res or [])
     for rel, kind, table, fk in specs:
         for r in rows:
             if kind == "belongsTo":
                 r[rel] = _db_find(table, r.get(fk))
+            elif kind == "belongsToMany":
+                pv, f1, f2 = fk.split("|")
+                r[rel] = _db_many(table, pv, f1, f2, r["id"])
             else:
                 kids = _db_get(_Q(table, [(fk, "=", r["id"])], [], None))
                 r[rel] = kids if kind == "hasMany" else (kids[0] if kids else None)

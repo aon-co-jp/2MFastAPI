@@ -96,3 +96,20 @@ Route::get('/users-with-orders', function () {
 Route::get('/orders-with-owner', function () {
     return Order::with('user')->get();
 });
+
+Route::post('/roles/seed', function () {
+    DB::table('roles')->insert(['name' => 'admin']);
+    DB::table('roles')->insert(['name' => 'editor']);
+    DB::table('role_user')->insert(['user_id' => 1, 'role_id' => 1]);
+    DB::table('role_user')->insert(['user_id' => 1, 'role_id' => 2]);
+    DB::table('role_user')->insert(['user_id' => 2, 'role_id' => 2]);
+    return ['ok' => true];
+});
+
+Route::get('/users/{user}/roles', function (User $user) {
+    return $user->roles;
+});
+
+Route::get('/users-with-roles', function () {
+    return User::with('roles')->get();
+});

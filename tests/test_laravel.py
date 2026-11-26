@@ -21,7 +21,7 @@ def _app(out, monkeypatch=None):
 
 def test_counts(tmp_path, monkeypatch):
     ok, todo, _, _ = _app(tmp_path, monkeypatch)
-    assert (ok, todo) == (37, 2)
+    assert (ok, todo) == (40, 2)
 
 
 def test_routes(tmp_path, monkeypatch):
@@ -216,3 +216,14 @@ def test_with_eager_loading(tmp_path, monkeypatch):
     assert [(u["name"], [o["amount"] for o in u["orders"]]) for u in users] == [("Aoi", [150, 20]), ("Ren", [70])]  # with() hasMany
     orders = c.get("/api/orders-with-owner").json()
     assert [o["user"]["name"] for o in orders] == ["Aoi", "Aoi", "Ren"]                                              # with() belongsTo
+
+
+def test_belongs_to_many(tmp_path, monkeypatch):
+    _, _, c, _ = _app(tmp_path, monkeypatch)
+    c.post("/photos", json={"name": "Aoi", "email": "a@example.test"})
+    c.post("/photos", json={"name": "Ren", "email": "r@example.test"})
+    assert c.post("/api/roles/seed").json() == {"ok": True}
+    assert [r["name"] for r in c.get("/api/users/1/roles").json()] == ["admin", "editor"]   # $user->roles (pivot role_user)
+    assert [r["name"] for r in c.get("/api/users/2/roles").json()] == ["editor"]
+    users = c.get("/api/users-with-roles").json()                                              # with('roles')
+    assert [(u["name"], [r["name"] for r in u["roles"]]) for u in users] == [("Aoi", ["admin", "editor"]), ("Ren", ["editor"])]
