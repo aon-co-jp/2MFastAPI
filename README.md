@@ -131,3 +131,7 @@ WSL: `bash run-tests.sh`(`2FastAPI` を隣に置く / keep 2FastAPI checked out 
 ## 2026-11-27 追記(9): 入れ子の with('a.b') / Update (9): nested eager loading
 **日本語**: `User::with('orders.user')` のようにドット区切りで関係を辿る入れ子の `with` に対応(関係の途中が見つからない場合は従来どおり TODO)。例 `/api/users-orders-owner` と試験を足し、テスト28件が成功(変換できたルート48本)。**限界**: 配列で複数の入れ子を同時に渡す書き方は個別の文字列として拾うが、`withPivot`・`attach`・`sync`・`old()` は未対応。
 **English**: Nested `with` using dotted paths such as `User::with('orders.user')` is now converted (a missing relation along the path still stays TODO). Added `/api/users-orders-owner` and a test; 28 tests pass (48 routes converted). **Limits**: `withPivot`, `attach`, `sync` and `old()` are still unsupported.
+
+## 2026-11-27 追記(10): 多対多の attach・detach・sync / Update (10)
+**日本語**: `$user->roles()->attach($id)`・`detach($id)`(引数なしは全解除)・`sync([ids])` に対応。中間表への追加は重複を作らず、`sync` は含まれない行を消します。パスパラメーターは文字列で届くため、数字だけの文字列は整数に直して比べます。例のルート3本と試験を足し、テスト29件が成功(変換できたルート51本)。**限界**: 中間表の追加列を渡す `attach($id, ['k' => v])`・`sync` の連想配列・`withPivot`・`wherePivot` は未対応(TODO)。
+**English**: `$user->roles()->attach($id)`, `detach($id)` (no argument removes all) and `sync([ids])` are now converted. Inserting into the pivot never creates duplicates, and `sync` removes rows not in the list. Path parameters arrive as strings, so digit-only strings are converted to integers before comparing. Added three example routes and a test; 29 tests pass (51 routes converted). **Limits**: `attach($id, ['k' => v])` with extra pivot columns, associative `sync`, `withPivot` and `wherePivot` are unsupported (left as TODO).
