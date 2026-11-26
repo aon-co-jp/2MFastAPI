@@ -21,7 +21,7 @@ def _app(out, monkeypatch=None):
 
 def test_counts(tmp_path, monkeypatch):
     ok, todo, _, _ = _app(tmp_path, monkeypatch)
-    assert (ok, todo) == (46, 2)
+    assert (ok, todo) == (47, 2)
 
 
 def test_routes(tmp_path, monkeypatch):
@@ -253,3 +253,10 @@ def test_session_increment(tmp_path, monkeypatch):
     _, _, c, _ = _app(tmp_path, monkeypatch)
     assert c.get("/api/hits").json() == {"hits": 1}
     assert c.get("/api/hits").json() == {"hits": 2}
+
+
+def test_session_token(tmp_path, monkeypatch):
+    _, _, c, _ = _app(tmp_path, monkeypatch)
+    a = c.get("/api/csrf").json()
+    assert len(a["t1"]) == 40 and a["t1"] == a["t2"]
+    assert c.get("/api/csrf").json()["t1"] == a["t1"]          # stable within one session

@@ -143,3 +143,7 @@ Route::get('/hits', function (Request $request) {
     $n = $request->session()->increment('hits');
     return ['hits' => $n];
 });
+
+Route::get('/csrf', function (Request $request) {
+    return ['t1' => $request->session()->token(), 't2' => $request->session()->token()];
+});

@@ -592,6 +592,8 @@ def _session_call(name: str, raw: str, ctx: "Ctx") -> Optional[Tuple[str, str]]:
         return "_sess_%s(request, %s, %s)" % (name, k, a[1][0]), "json"
     if name in ("forget", "remove") and n == 1:
         return "_sess_forget(request, %s)" % k, "json"
+    if name == "token" and n == 0:
+        return "_sess_token(request)", "any"
     if name in ("increment", "decrement") and n in (1, 2):
         return "_sess_inc(request, %s, %s)" % (k, ("-(%s)" % a[1][0]) if name == "decrement" and n == 2 else (a[1][0] if n == 2 else "-1" if name == "decrement" else "1")), "any"
     if name in ("invalidate", "flush", "regenerate", "regenerateToken", "migrate") and n in (0, 1):
@@ -1380,6 +1382,12 @@ def _sess_keep(request):             # regenerate(): the signed cookie holds the
     return None
 
 
+def _sess_token(request):
+    if "_token" not in request.session:
+        request.session["_token"] = _secrets.token_hex(20)
+    return request.session["_token"]
+
+
 def _sess_inc(request, key, by):
     v = (request.session.get(key) or 0) + by
     request.session[key] = v
@@ -1387,7 +1395,7 @@ def _sess_inc(request, key, by):
 
 
 def _sess_all(request):
-    return {k: v for k, v in request.session.items() if not k.startswith("_flash")}
+    return {k: v for k, v in request.session.items() if not k.startswith("_flash") and k != "_token"}
 '''
 
 _VIEW_CODE = '''
