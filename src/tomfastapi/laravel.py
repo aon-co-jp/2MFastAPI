@@ -724,6 +724,15 @@ def _expr(e: str, ctx: Ctx) -> Optional[Tuple[str, str]]:
                 return None
             ctx.uses_body = True
             return "_validate(_body, %s)" % rules, "json"
+    m = re.fullmatch(r"\$(\w+)->(\w+)\(\)->(attach|detach|sync)\((.*)\)", e, re.S)
+    if m and m.group(1) in ctx.vars:
+        hit = ctx.proj.relations.get((ctx.var_model.get(m.group(1)), m.group(2)))
+        if hit and hit[0] == "belongsToMany":
+            a = _args(m.group(4), ctx) if m.group(4).strip() else []
+            if a is not None and len(a) <= 1 and (a or m.group(3) == "detach"):
+                ctx.uses_db = True
+                pv, f1, f2 = hit[2].split("|")
+                return "_db_pivot(%r, %r, %r, %s['id'], %r, %s)" % (pv, f1, f2, m.group(1), m.group(3), a[0][0] if a else "None"), "json"
     m = re.fullmatch(r"\$(\w+)->(\w+)", e)
     if m and m.group(1) in ctx.vars and (m.group(1), m.group(2)) and _relation(m.group(1), m.group(2), ctx):
         return _relation(m.group(1), m.group(2), ctx)
@@ -1284,6 +1293,25 @@ def _db_insert(name, data):
     with _engine.begin() as c:
         for r in rows:
             c.execute(insert(t).values(**{k: v for k, v in dict(r).items() if k in t.c}))
+    return True
+
+
+def _db_pivot(pivot, f1, f2, key, mode, ids):
+    t = _t(pivot)
+    ids = [] if ids is None else (list(ids) if isinstance(ids, (list, tuple)) else [ids])
+    ids = [int(i) if isinstance(i, str) and i.lstrip('-').isdigit() else i for i in ids]   # path parameters arrive as strings
+    with _engine.begin() as c:
+        have = {r[0] for r in c.execute(select(t.c[f2]).where(t.c[f1] == key))}
+        if mode == "sync":
+            gone = have - set(ids)
+            if gone:
+                c.execute(delete(t).where(t.c[f1] == key, t.c[f2].in_(gone)))
+        if mode == "detach":
+            c.execute(delete(t).where(t.c[f1] == key, *([t.c[f2].in_(ids)] if ids else [])))
+        else:
+            for i in ids:
+                if i not in have:
+                    c.execute(insert(t).values(**{f1: key, f2: i}))
     return True
 
 

@@ -21,7 +21,7 @@ def _app(out, monkeypatch=None):
 
 def test_counts(tmp_path, monkeypatch):
     ok, todo, _, _ = _app(tmp_path, monkeypatch)
-    assert (ok, todo) == (48, 2)
+    assert (ok, todo) == (51, 2)
 
 
 def test_routes(tmp_path, monkeypatch):
@@ -262,3 +262,19 @@ def test_session_token(tmp_path, monkeypatch):
     a = c.get("/api/csrf").json()
     assert len(a["t1"]) == 40 and a["t1"] == a["t2"]
     assert c.get("/api/csrf").json()["t1"] == a["t1"]          # stable within one session
+
+
+def test_attach_detach_sync(tmp_path, monkeypatch):
+    _, _, c, _ = _app(tmp_path, monkeypatch)
+    c.post("/photos", json={"name": "Aoi", "email": "a@example.test"})
+    c.post("/photos", json={"name": "Ren", "email": "r@example.test"})
+    c.post("/api/roles/seed")
+    names = lambda u: sorted(r["name"] for r in c.get("/api/users/%d/roles" % u).json())
+    assert c.post("/api/users/2/roles/1/attach").json() == {"ok": True}
+    assert names(2) == ["admin", "editor"]
+    assert c.post("/api/users/2/roles/1/attach").json() == {"ok": True}      # attaching twice adds no duplicate
+    assert names(2) == ["admin", "editor"]
+    assert c.post("/api/users/2/roles/2/detach").json() == {"ok": True}
+    assert names(2) == ["admin"]
+    assert c.post("/api/users/1/roles-only-admin").json() == {"ok": True}    # sync([1]) drops editor
+    assert names(1) == ["admin"]

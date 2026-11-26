@@ -151,3 +151,18 @@ Route::get('/csrf', function (Request $request) {
 Route::get('/users-orders-owner', function () {
     return User::with('orders.user')->get();
 });
+
+Route::post('/users/{user}/roles/{role}/attach', function (User $user, $role) {
+    $user->roles()->attach($role);
+    return ['ok' => true];
+});
+
+Route::post('/users/{user}/roles/{role}/detach', function (User $user, $role) {
+    $user->roles()->detach($role);
+    return ['ok' => true];
+});
+
+Route::post('/users/{user}/roles-only-admin', function (User $user) {
+    $user->roles()->sync([1]);
+    return ['ok' => true];
+});
