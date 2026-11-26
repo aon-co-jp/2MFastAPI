@@ -469,16 +469,19 @@ def _db_expr(e: str, ctx: "Ctx") -> Optional[Tuple[str, str]]:
         table, calls = _php_str(raw), calls[1:]
     else:
         table = ctx.proj.table_of(m.group(1))
-    where, order, limit = [], [], "None"
+    where, order, limit, joins = [], [], "None", []
     for i, (name, raw) in enumerate(calls):
         last = i == len(calls) - 1
         a = _args(raw, ctx)
         if a is None:
             return None
-        q = "_Q(%r, [%s], [%s], %s)" % (table, ", ".join(where), ", ".join(order), limit)
+        q = "_Q(%r, [%s], [%s], %s%s)" % (table, ", ".join(where), ", ".join(order), limit, (", [%s]" % ", ".join(joins)) if joins else "")
         if name in ("where", "orWhere") and len(a) in (2, 3):
             conj = ", 'or'" if name == "orWhere" else ""
             where.append("(%s, '=', %s%s)" % (a[0][0], a[1][0], conj) if len(a) == 2 else "(%s, %s, %s%s)" % (a[0][0], a[1][0], a[2][0], conj))
+        elif name in ("join", "leftJoin") and len(a) in (3, 4):
+            kind = "'left'" if name == "leftJoin" else "'inner'"
+            joins.append("(%s, %s, %s, %s, %s)" % (kind, a[0][0], a[1][0], a[2][0] if len(a) == 4 else "'='", a[-1][0]))
         elif name in ("whereIn", "whereNotIn", "orWhereIn") and len(a) == 2:
             op = "'not in'" if name == "whereNotIn" else "'in'"
             where.append("(%s, %s, %s%s)" % (a[0][0], op, a[1][0], ", 'or'" if name == "orWhereIn" else ""))
@@ -1074,8 +1077,22 @@ _OPS = {"=": "__eq__", "==": "__eq__", "!=": "__ne__", "<>": "__ne__", "<": "__l
         "<=": "__le__", ">=": "__ge__", "like": "like"}
 
 
-def _Q(name, where, order, limit):
-    return {"t": name, "where": where, "order": order, "limit": limit}
+def _Q(name, where, order, limit, joins=()):
+    return {"t": name, "where": where, "order": order, "limit": limit, "joins": list(joins)}
+
+
+def _col(q, name):
+    if "." in name:
+        tb, cn = name.split(".", 1)
+        return _t(tb).c[cn]
+    return _t(q["t"]).c[name]
+
+
+def _from(q):
+    src = _t(q["t"])
+    for kind, tb, a, op, b in q.get("joins", []):
+        src = src.join(_t(tb), getattr(_col(q, a), _OPS[str(op).lower()])(_col(q, b)), isouter=(kind == "left"))
+    return src
 
 
 def _apply(q, stmt):
@@ -1084,7 +1101,7 @@ def _apply(q, stmt):
     cond = None
     for w in q["where"]:
         col, op, val = w[0], str(w[1]).lower(), w[2]
-        c = t.c[col]
+        c = _col(q, col)
         if op == "in":
             e = c.in_(list(val))
         elif op == "not in":
@@ -1106,12 +1123,18 @@ def _apply(q, stmt):
 
 def _db_get(q):
     t = _t(q["t"])
-    stmt = _apply(q, select(t))
+    joined = bool(q.get("joins"))
+    cols = list(t.c) + [c for jt in q.get("joins", []) for c in _t(jt[1]).c]
+    stmt = _apply(q, select(*cols).select_from(_from(q)) if joined else select(t))
     for col, d in q["order"]:
-        stmt = stmt.order_by(t.c[col].desc() if str(d).lower() == "desc" else t.c[col].asc())
+        cc = _col(q, col)
+        stmt = stmt.order_by(cc.desc() if str(d).lower() == "desc" else cc.asc())
     if q["limit"] is not None:
         stmt = stmt.limit(int(q["limit"]))
-    return _rows(stmt)
+    if not joined:
+        return _rows(stmt)
+    with _engine.connect() as c:                      # 列名が重なるときは後ろの表が勝つ(Laravel/PDO と同じ)
+        return [{k.name: v for k, v in zip(cols, r)} for r in c.execute(stmt)]
 
 
 def _db_first(q):
@@ -1122,7 +1145,7 @@ def _db_first(q):
 def _db_count(q):
     from sqlalchemy import func
     with _engine.connect() as c:
-        return c.execute(_apply(q, select(func.count()).select_from(_t(q["t"])))).scalar()
+        return c.execute(_apply(q, select(func.count()).select_from(_from(q)))).scalar()
 
 
 def _cols(t, data, now_cols=("updated_at",)):

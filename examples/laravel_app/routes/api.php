@@ -76,3 +76,15 @@ Route::get('/report2', function () {
         'notnull' => DB::table('orders')->whereNotNull('status')->count(),
     ];
 });
+
+Route::get('/joined', function () {
+    return DB::table('orders')
+        ->join('users', 'orders.user_id', '=', 'users.id')
+        ->where('orders.status', 'paid')
+        ->orderBy('orders.id')
+        ->get();
+});
+
+Route::get('/joined-count', function () {
+    return ['n' => DB::table('orders')->leftJoin('users', 'orders.user_id', '=', 'users.id')->count()];
+});

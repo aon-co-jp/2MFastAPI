@@ -21,7 +21,7 @@ def _app(out, monkeypatch=None):
 
 def test_counts(tmp_path, monkeypatch):
     ok, todo, _, _ = _app(tmp_path, monkeypatch)
-    assert (ok, todo) == (33, 2)
+    assert (ok, todo) == (35, 2)
 
 
 def test_routes(tmp_path, monkeypatch):
@@ -193,3 +193,14 @@ def test_or_where_in_null(tmp_path, monkeypatch):
     assert r["in"] == [3]               # whereIn
     assert r["notin"] == [2]            # whereNotIn
     assert r["notnull"] == 3            # whereNotNull
+
+
+def test_joins(tmp_path, monkeypatch):
+    _, _, c, _ = _app(tmp_path, monkeypatch)
+    c.post("/photos", json={"name": "Aoi", "email": "a@example.test"})
+    c.post("/photos", json={"name": "Ren", "email": "r@example.test"})
+    for uid, amount, st in ((1, 150, "paid"), (1, 20, "new"), (2, 70, "paid")):
+        c.post("/api/orders", json={"user_id": uid, "amount": amount, "status": st})
+    rows = c.get("/api/joined").json()
+    assert [(r["name"], r["amount"]) for r in rows] == [("Aoi", 150), ("Ren", 70)]   # join + qualified where/orderBy
+    assert c.get("/api/joined-count").json() == {"n": 3}                              # leftJoin + count
