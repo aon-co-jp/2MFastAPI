@@ -138,3 +138,8 @@ Route::post('/cart/reset', function (Request $request) {
     $request->session()->invalidate();
     return ['reset' => true];
 });
+
+Route::get('/hits', function (Request $request) {
+    $n = $request->session()->increment('hits');
+    return ['hits' => $n];
+});

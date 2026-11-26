@@ -21,7 +21,7 @@ def _app(out, monkeypatch=None):
 
 def test_counts(tmp_path, monkeypatch):
     ok, todo, _, _ = _app(tmp_path, monkeypatch)
-    assert (ok, todo) == (45, 2)
+    assert (ok, todo) == (46, 2)
 
 
 def test_routes(tmp_path, monkeypatch):
@@ -247,3 +247,9 @@ def test_session_and_flash(tmp_path, monkeypatch):
     c.post("/api/cart/add", json={"item": "pen"})
     assert c.post("/api/cart/reset").json() == {"reset": True}                            # put + invalidate
     assert c.get("/api/cart").json()["cart"] is None
+
+
+def test_session_increment(tmp_path, monkeypatch):
+    _, _, c, _ = _app(tmp_path, monkeypatch)
+    assert c.get("/api/hits").json() == {"hits": 1}
+    assert c.get("/api/hits").json() == {"hits": 2}
