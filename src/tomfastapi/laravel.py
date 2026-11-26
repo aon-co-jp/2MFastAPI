@@ -693,7 +693,18 @@ def _expr(e: str, ctx: Ctx) -> Optional[Tuple[str, str]]:
             ctx.uses_request = True
             return "_sess_put_many(request, %s)" % a[0][0], "json"
         return _session_call("get", raw, ctx)
+    om = re.fullmatch(r"old\((.*)\)", e, re.S)
+    if om:
+        a = _args(om.group(1), ctx) if om.group(1).strip() else []
+        if a is None or len(a) not in (1, 2):
+            return None
+        ctx.uses_request = True
+        return "_sess_old(request, %s)" % ", ".join(x[0] for x in a), "any"
     rq = ctx.request_var
+    if rq and re.fullmatch(r"\$%s->(flash|flashOnly|flashExcept)\(\)" % rq, e):
+        ctx.uses_body = True
+        ctx.uses_request = True
+        return "_sess_flash_input(request, _body)", "json"
     if rq:
         sm = re.fullmatch(r"\$%s->session\(\)->(\w+)\((.*)\)" % rq, e, re.S)
         if sm:
@@ -1419,6 +1430,15 @@ def _sess_get(request, key, default=None):
     if key in s:
         return s[key]
     return s.get("_flash_old", {}).get(key, default)
+
+
+def _sess_flash_input(request, data):
+    request.session.setdefault("_flash_new", {})["_input"] = dict(data or {})
+    return True
+
+
+def _sess_old(request, key, default=None):
+    return (_sess_get(request, "_input", None) or {}).get(key, default)
 
 
 def _sess_put(request, key, value):

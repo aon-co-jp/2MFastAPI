@@ -21,7 +21,7 @@ def _app(out, monkeypatch=None):
 
 def test_counts(tmp_path, monkeypatch):
     ok, todo, _, _ = _app(tmp_path, monkeypatch)
-    assert (ok, todo) == (55, 2)
+    assert (ok, todo) == (57, 2)
 
 
 def test_routes(tmp_path, monkeypatch):
@@ -300,3 +300,11 @@ def test_with_pivot(tmp_path, monkeypatch):
     assert sorted((r["name"], r["pivot"]["granted_by"]) for r in rows) == [("admin", "admin"), ("editor", None)]
     only = c.get("/api/users/2/roles-by-grant").json()                                         # wherePivot
     assert [r["name"] for r in only] == ["admin"]
+
+
+def test_flash_input_and_old(tmp_path, monkeypatch):
+    _, _, c, _ = _app(tmp_path, monkeypatch)
+    assert c.get("/api/form/old").json() == {"name": None, "missing": "dflt"}
+    assert c.post("/api/form/flash", json={"name": "Aoi"}).json() == {"flashed": True}
+    assert c.get("/api/form/old").json() == {"name": "Aoi", "missing": "dflt"}     # next request only
+    assert c.get("/api/form/old").json() == {"name": None, "missing": "dflt"}

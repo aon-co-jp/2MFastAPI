@@ -183,3 +183,12 @@ Route::get('/users/{user}/roles-granted', function (User $user) {
 Route::get('/users/{user}/roles-by-grant', function (User $user) {
     return $user->roles()->withPivot('granted_by')->wherePivot('granted_by', 'admin')->get();
 });
+
+Route::post('/form/flash', function (Request $request) {
+    $request->flash();
+    return ['flashed' => true];
+});
+
+Route::get('/form/old', function () {
+    return ['name' => old('name'), 'missing' => old('nope', 'dflt')];
+});
