@@ -476,8 +476,14 @@ def _db_expr(e: str, ctx: "Ctx") -> Optional[Tuple[str, str]]:
         if a is None:
             return None
         q = "_Q(%r, [%s], [%s], %s)" % (table, ", ".join(where), ", ".join(order), limit)
-        if name == "where" and len(a) in (2, 3):
-            where.append("(%s, '=', %s)" % (a[0][0], a[1][0]) if len(a) == 2 else "(%s, %s, %s)" % (a[0][0], a[1][0], a[2][0]))
+        if name in ("where", "orWhere") and len(a) in (2, 3):
+            conj = ", 'or'" if name == "orWhere" else ""
+            where.append("(%s, '=', %s%s)" % (a[0][0], a[1][0], conj) if len(a) == 2 else "(%s, %s, %s%s)" % (a[0][0], a[1][0], a[2][0], conj))
+        elif name in ("whereIn", "whereNotIn", "orWhereIn") and len(a) == 2:
+            op = "'not in'" if name == "whereNotIn" else "'in'"
+            where.append("(%s, %s, %s%s)" % (a[0][0], op, a[1][0], ", 'or'" if name == "orWhereIn" else ""))
+        elif name in ("whereNull", "whereNotNull") and len(a) == 1:
+            where.append("(%s, %s, None)" % (a[0][0], "'null'" if name == "whereNull" else "'notnull'"))
         elif name == "orderBy" and len(a) in (1, 2):
             order.append("(%s, %s)" % (a[0][0], a[1][0] if len(a) == 2 else "'asc'"))
         elif name in ("latest", "oldest") and len(a) <= 1:
@@ -1074,9 +1080,28 @@ def _Q(name, where, order, limit):
 
 def _apply(q, stmt):
     t = _t(q["t"])
-    for col, op, val in q["where"]:
-        stmt = stmt.where(getattr(t.c[col], _OPS[op.lower()])(val))
-    return stmt
+    from sqlalchemy import and_, or_
+    cond = None
+    for w in q["where"]:
+        col, op, val = w[0], str(w[1]).lower(), w[2]
+        c = t.c[col]
+        if op == "in":
+            e = c.in_(list(val))
+        elif op == "not in":
+            e = c.not_in(list(val))
+        elif op == "null":
+            e = c.is_(None)
+        elif op == "notnull":
+            e = c.is_not(None)
+        else:
+            e = getattr(c, _OPS[op])(val)
+        if cond is None:
+            cond = e
+        elif len(w) > 3 and w[3] == "or":
+            cond = or_(cond, e)
+        else:
+            cond = and_(cond, e)
+    return stmt if cond is None else stmt.where(cond)
 
 
 def _db_get(q):

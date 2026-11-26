@@ -21,7 +21,7 @@ def _app(out, monkeypatch=None):
 
 def test_counts(tmp_path, monkeypatch):
     ok, todo, _, _ = _app(tmp_path, monkeypatch)
-    assert (ok, todo) == (32, 2)
+    assert (ok, todo) == (33, 2)
 
 
 def test_routes(tmp_path, monkeypatch):
@@ -180,3 +180,16 @@ def test_blade_components_and_loop(tmp_path, monkeypatch):
     assert '<div class="alert alert-warn"><b>&lt;Aoi&gt;</b> 2 orders</div>' in html     # <x-alert> + slot
     assert '<div class="alert alert-info"></div>' in html                                # @props default
     assert '<li data-i="0">1/2 paid</li>' in html and '<li data-i="1">2/2 new (last)</li>' in html  # $loop
+
+
+def test_or_where_in_null(tmp_path, monkeypatch):
+    _, _, c, _ = _app(tmp_path, monkeypatch)
+    c.post("/photos", json={"name": "Aoi", "email": "a@example.test"})
+    c.post("/photos", json={"name": "Ren", "email": "r@example.test"})
+    for uid, amount, st in ((1, 150, "paid"), (1, 20, "new"), (2, 70, "paid")):
+        c.post("/api/orders", json={"user_id": uid, "amount": amount, "status": st})
+    r = c.get("/api/report2").json()
+    assert r["either"] == [1, 2]       # where(amount>100) OR status=new
+    assert r["in"] == [3]               # whereIn
+    assert r["notin"] == [2]            # whereNotIn
+    assert r["notnull"] == 3            # whereNotNull

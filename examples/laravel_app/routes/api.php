@@ -67,3 +67,12 @@ Route::get('/users/{user}/page', function (User $user) {
     $orders = $user->orders;
     return view('orders', compact('user', 'orders'));
 });
+
+Route::get('/report2', function () {
+    return [
+        'either' => DB::table('orders')->where('amount', '>', 100)->orWhere('status', 'new')->orderBy('id')->pluck('id'),
+        'in' => DB::table('orders')->whereIn('user_id', [2])->pluck('id'),
+        'notin' => DB::table('orders')->whereNotIn('status', ['paid'])->pluck('id'),
+        'notnull' => DB::table('orders')->whereNotNull('status')->count(),
+    ];
+});
