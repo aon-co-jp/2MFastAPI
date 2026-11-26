@@ -147,3 +147,7 @@ Route::get('/hits', function (Request $request) {
 Route::get('/csrf', function (Request $request) {
     return ['t1' => $request->session()->token(), 't2' => $request->session()->token()];
 });
+
+Route::get('/users-orders-owner', function () {
+    return User::with('orders.user')->get();
+});

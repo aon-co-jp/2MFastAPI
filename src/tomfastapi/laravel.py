@@ -499,18 +499,11 @@ def _db_expr_core(e: str, ctx: "Ctx") -> Optional[Tuple[str, str]]:
     for i, (name, raw) in enumerate(calls):
         last = i == len(calls) - 1
         if name == "with" and m.group(1) != "DB" and not last:
-            for rel in re.findall(r"""['"]([A-Za-z_]\w*)['"]""", raw):
-                hit = ctx.proj.relations.get((m.group(1), rel))
-                if not hit:
+            for path in re.findall(r"""['"]([A-Za-z_][\w.]*)['"]""", raw):
+                spec = _with_spec(ctx, m.group(1), path.split("."))
+                if spec is None:
                     return None
-                kind, target, fk = hit
-                if kind == "belongsToMany":
-                    pass
-                elif kind != "belongsTo":
-                    fk = fk or re.sub(r"(?<!^)([A-Z])", r"_", m.group(1)).lower() + "_id"
-                else:
-                    fk = fk or rel + "_id"
-                ctx.withs.append("(%r, %r, %r, %r)" % (rel, kind, ctx.proj.table_of(target), fk))
+                ctx.withs.append(spec)
             continue
         a = _args(raw, ctx)
         if a is None:
@@ -599,6 +592,28 @@ def _session_call(name: str, raw: str, ctx: "Ctx") -> Optional[Tuple[str, str]]:
     if name in ("invalidate", "flush", "regenerate", "regenerateToken", "migrate") and n in (0, 1):
         return "_sess_%s(request)" % ("flush" if name in ("invalidate", "flush") else "keep"), "json"
     return None
+
+
+def _with_spec(ctx, model, path):
+    """eager-load spec (rel, kind, table, fk, sub-specs) for 'a.b.c' paths."""
+    rel = path[0]
+    hit = ctx.proj.relations.get((model, rel))
+    if not hit:
+        return None
+    kind, target, fk = hit
+    if kind == "belongsToMany":
+        pass
+    elif kind != "belongsTo":
+        fk = fk or re.sub(r"(?<!^)([A-Z])", r"_", model).lower() + "_id"
+    else:
+        fk = fk or rel + "_id"
+    sub = []
+    if len(path) > 1:
+        t = _with_spec(ctx, target, path[1:])
+        if t is None:
+            return None
+        sub.append(t)
+    return "(%r, %r, %r, %r, [%s])" % (rel, kind, ctx.proj.table_of(target), fk, ", ".join(sub))
 
 
 def _relation(var: str, rel: str, ctx: "Ctx") -> Optional[Tuple[str, str]]:
@@ -1157,7 +1172,7 @@ def _db_many(target_table, pivot, fk, rfk, key):
 
 def _with(res, specs):
     rows = [res] if isinstance(res, dict) else (res or [])
-    for rel, kind, table, fk in specs:
+    for rel, kind, table, fk, *sub in specs:
         for r in rows:
             if kind == "belongsTo":
                 r[rel] = _db_find(table, r.get(fk))
@@ -1167,6 +1182,8 @@ def _with(res, specs):
             else:
                 kids = _db_get(_Q(table, [(fk, "=", r["id"])], [], None))
                 r[rel] = kids if kind == "hasMany" else (kids[0] if kids else None)
+            if sub and sub[0] and r.get(rel):
+                _with(r[rel], sub[0])
     return res
 
 

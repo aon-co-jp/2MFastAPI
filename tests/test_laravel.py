@@ -21,7 +21,7 @@ def _app(out, monkeypatch=None):
 
 def test_counts(tmp_path, monkeypatch):
     ok, todo, _, _ = _app(tmp_path, monkeypatch)
-    assert (ok, todo) == (47, 2)
+    assert (ok, todo) == (48, 2)
 
 
 def test_routes(tmp_path, monkeypatch):
@@ -216,6 +216,8 @@ def test_with_eager_loading(tmp_path, monkeypatch):
     assert [(u["name"], [o["amount"] for o in u["orders"]]) for u in users] == [("Aoi", [150, 20]), ("Ren", [70])]  # with() hasMany
     orders = c.get("/api/orders-with-owner").json()
     assert [o["user"]["name"] for o in orders] == ["Aoi", "Aoi", "Ren"]                                              # with() belongsTo
+    nested = c.get("/api/users-orders-owner").json()
+    assert [[o["user"]["name"] for o in u["orders"]] for u in nested] == [["Aoi", "Aoi"], ["Ren"]]                    # nested with('orders.user')
 
 
 def test_belongs_to_many(tmp_path, monkeypatch):
