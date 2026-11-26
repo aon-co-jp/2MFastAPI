@@ -729,10 +729,10 @@ def _expr(e: str, ctx: Ctx) -> Optional[Tuple[str, str]]:
         hit = ctx.proj.relations.get((ctx.var_model.get(m.group(1)), m.group(2)))
         if hit and hit[0] == "belongsToMany":
             a = _args(m.group(4), ctx) if m.group(4).strip() else []
-            if a is not None and len(a) <= 1 and (a or m.group(3) == "detach"):
+            if a is not None and (len(a) <= 1 or (len(a) == 2 and m.group(3) == "attach")) and (a or m.group(3) == "detach"):
                 ctx.uses_db = True
                 pv, f1, f2 = hit[2].split("|")
-                return "_db_pivot(%r, %r, %r, %s['id'], %r, %s)" % (pv, f1, f2, m.group(1), m.group(3), a[0][0] if a else "None"), "json"
+                return "_db_pivot(%r, %r, %r, %s['id'], %r, %s)" % (pv, f1, f2, m.group(1), m.group(3), a[0][0] if a else "None") if len(a) < 2 else "_db_pivot(%r, %r, %r, %s['id'], 'attach', %s, %s)" % (pv, f1, f2, m.group(1), a[0][0], a[1][0]), "json"
     m = re.fullmatch(r"\$(\w+)->(\w+)", e)
     if m and m.group(1) in ctx.vars and (m.group(1), m.group(2)) and _relation(m.group(1), m.group(2), ctx):
         return _relation(m.group(1), m.group(2), ctx)
@@ -1296,7 +1296,7 @@ def _db_insert(name, data):
     return True
 
 
-def _db_pivot(pivot, f1, f2, key, mode, ids):
+def _db_pivot(pivot, f1, f2, key, mode, ids, extra=None):
     t = _t(pivot)
     ids = [] if ids is None else (list(ids) if isinstance(ids, (list, tuple)) else [ids])
     ids = [int(i) if isinstance(i, str) and i.lstrip('-').isdigit() else i for i in ids]   # path parameters arrive as strings
@@ -1311,7 +1311,7 @@ def _db_pivot(pivot, f1, f2, key, mode, ids):
         else:
             for i in ids:
                 if i not in have:
-                    c.execute(insert(t).values(**{f1: key, f2: i}))
+                    c.execute(insert(t).values(**{**{k: v for k, v in (extra or {}).items() if k in t.c}, f1: key, f2: i}))
     return True
 
 

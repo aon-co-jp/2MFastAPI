@@ -9,6 +9,7 @@ return new class extends Migration {
         Schema::create('role_user', function (Blueprint $table) {
             $table->foreignId('user_id');
             $table->foreignId('role_id');
+            $table->string('granted_by')->nullable();
         });
     }
 };

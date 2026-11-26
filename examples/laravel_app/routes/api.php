@@ -166,3 +166,12 @@ Route::post('/users/{user}/roles-only-admin', function (User $user) {
     $user->roles()->sync([1]);
     return ['ok' => true];
 });
+
+Route::post('/users/{user}/roles/{role}/grant', function (User $user, $role) {
+    $user->roles()->attach($role, ['granted_by' => 'admin']);
+    return ['ok' => true];
+});
+
+Route::get('/pivot', function () {
+    return DB::table('role_user')->get();
+});

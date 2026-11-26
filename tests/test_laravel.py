@@ -21,7 +21,7 @@ def _app(out, monkeypatch=None):
 
 def test_counts(tmp_path, monkeypatch):
     ok, todo, _, _ = _app(tmp_path, monkeypatch)
-    assert (ok, todo) == (51, 2)
+    assert (ok, todo) == (53, 2)
 
 
 def test_routes(tmp_path, monkeypatch):
@@ -278,3 +278,13 @@ def test_attach_detach_sync(tmp_path, monkeypatch):
     assert names(2) == ["admin"]
     assert c.post("/api/users/1/roles-only-admin").json() == {"ok": True}    # sync([1]) drops editor
     assert names(1) == ["admin"]
+
+
+def test_attach_with_pivot_columns(tmp_path, monkeypatch):
+    _, _, c, _ = _app(tmp_path, monkeypatch)
+    c.post("/photos", json={"name": "Aoi", "email": "a@example.test"})
+    c.post("/photos", json={"name": "Ren", "email": "r@example.test"})
+    c.post("/api/roles/seed")
+    assert c.post("/api/users/2/roles/1/grant").json() == {"ok": True}
+    rows = [r for r in c.get("/api/pivot").json() if r["granted_by"]]
+    assert [(r["user_id"], r["role_id"], r["granted_by"]) for r in rows] == [(2, 1, "admin")]   # extra pivot column written
