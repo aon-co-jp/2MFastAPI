@@ -179,3 +179,7 @@ Route::get('/pivot', function () {
 Route::get('/users/{user}/roles-granted', function (User $user) {
     return $user->roles()->withPivot('granted_by')->get();
 });
+
+Route::get('/users/{user}/roles-by-grant', function (User $user) {
+    return $user->roles()->withPivot('granted_by')->wherePivot('granted_by', 'admin')->get();
+});

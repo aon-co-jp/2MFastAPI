@@ -21,7 +21,7 @@ def _app(out, monkeypatch=None):
 
 def test_counts(tmp_path, monkeypatch):
     ok, todo, _, _ = _app(tmp_path, monkeypatch)
-    assert (ok, todo) == (54, 2)
+    assert (ok, todo) == (55, 2)
 
 
 def test_routes(tmp_path, monkeypatch):
@@ -298,3 +298,5 @@ def test_with_pivot(tmp_path, monkeypatch):
     c.post("/api/users/2/roles/1/grant")
     rows = c.get("/api/users/2/roles-granted").json()
     assert sorted((r["name"], r["pivot"]["granted_by"]) for r in rows) == [("admin", "admin"), ("editor", None)]
+    only = c.get("/api/users/2/roles-by-grant").json()                                         # wherePivot
+    assert [r["name"] for r in only] == ["admin"]

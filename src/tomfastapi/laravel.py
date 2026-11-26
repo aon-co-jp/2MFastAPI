@@ -724,14 +724,20 @@ def _expr(e: str, ctx: Ctx) -> Optional[Tuple[str, str]]:
                 return None
             ctx.uses_body = True
             return "_validate(_body, %s)" % rules, "json"
-    m = re.fullmatch(r"\$(\w+)->(\w+)\(\)->withPivot\((.*?)\)->get\(\)", e, re.S)
+    m = re.fullmatch(r"\$(\w+)->(\w+)\(\)->withPivot\((.*?)\)((?:->wherePivot\([^()]*\))*)->get\(\)", e, re.S)
     if m and m.group(1) in ctx.vars:
         hit = ctx.proj.relations.get((ctx.var_model.get(m.group(1)), m.group(2)))
         cols = re.findall(r"""['"](\w+)['"]""", m.group(3))
         if hit and hit[0] == "belongsToMany" and cols:
             ctx.uses_db = True
             pv, f1, f2 = hit[2].split("|")
-            return "_db_many_pivot(%r, %r, %r, %r, %s['id'], %r)" % (ctx.proj.table_of(hit[1]), pv, f1, f2, m.group(1), cols), "json"
+            wh = []
+            for w in re.findall(r"->wherePivot\(([^()]*)\)", m.group(4)):
+                wa = _args(w, ctx)
+                if wa is None or len(wa) != 2:
+                    return None
+                wh.append("(%s, %s)" % (wa[0][0], wa[1][0]))
+            return "_db_many_pivot(%r, %r, %r, %r, %s['id'], %r, [%s])" % (ctx.proj.table_of(hit[1]), pv, f1, f2, m.group(1), cols, ", ".join(wh)), "json"
     m = re.fullmatch(r"\$(\w+)->(\w+)\(\)->(attach|detach|sync)\((.*)\)", e, re.S)
     if m and m.group(1) in ctx.vars:
         hit = ctx.proj.relations.get((ctx.var_model.get(m.group(1)), m.group(2)))
@@ -1187,9 +1193,9 @@ def _db_many(target_table, pivot, fk, rfk, key):
     return _rows(select(tt).select_from(tt.join(pv, pv.c[rfk] == tt.c["id"])).where(pv.c[fk] == key))
 
 
-def _db_many_pivot(target_table, pivot, fk, rfk, key, cols):
+def _db_many_pivot(target_table, pivot, fk, rfk, key, cols, where=()):
     tt, pv = _t(target_table), _t(pivot)
-    q = select(tt, *[pv.c[k].label("_pv_" + k) for k in cols if k in pv.c]).select_from(tt.join(pv, pv.c[rfk] == tt.c["id"])).where(pv.c[fk] == key)
+    q = select(tt, *[pv.c[k].label("_pv_" + k) for k in cols if k in pv.c]).select_from(tt.join(pv, pv.c[rfk] == tt.c["id"])).where(pv.c[fk] == key, *[pv.c[k] == v for k, v in where])
     out = []
     for r in _rows(q):
         out.append({**{k: v for k, v in r.items() if not k.startswith("_pv_")},
