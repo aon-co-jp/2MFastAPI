@@ -127,3 +127,7 @@ WSL: `bash run-tests.sh`(`2FastAPI` を隣に置く / keep 2FastAPI checked out 
 ## 2026-11-27 追記(8): session()->token() / Update (8)
 **日本語**: `$request->session()->token()` に対応(セッションごとに固定のランダム値、`all()` には出さない)。テスト28件が成功(変換できたルート47本)。残る未対応は `old()` のみ。
 **English**: `$request->session()->token()` is now converted (a random value stable per session, not shown in `all()`). 28 tests pass (47 routes converted). Only `old()` remains unsupported.
+
+## 2026-11-27 追記(9): 入れ子の with('a.b') / Update (9): nested eager loading
+**日本語**: `User::with('orders.user')` のようにドット区切りで関係を辿る入れ子の `with` に対応(関係の途中が見つからない場合は従来どおり TODO)。例 `/api/users-orders-owner` と試験を足し、テスト28件が成功(変換できたルート48本)。**限界**: 配列で複数の入れ子を同時に渡す書き方は個別の文字列として拾うが、`withPivot`・`attach`・`sync`・`old()` は未対応。
+**English**: Nested `with` using dotted paths such as `User::with('orders.user')` is now converted (a missing relation along the path still stays TODO). Added `/api/users-orders-owner` and a test; 28 tests pass (48 routes converted). **Limits**: `withPivot`, `attach`, `sync` and `old()` are still unsupported.
