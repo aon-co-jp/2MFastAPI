@@ -88,3 +88,11 @@ Route::get('/joined', function () {
 Route::get('/joined-count', function () {
     return ['n' => DB::table('orders')->leftJoin('users', 'orders.user_id', '=', 'users.id')->count()];
 });
+
+Route::get('/users-with-orders', function () {
+    return User::with('orders')->get();
+});
+
+Route::get('/orders-with-owner', function () {
+    return Order::with('user')->get();
+});

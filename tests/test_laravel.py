@@ -21,7 +21,7 @@ def _app(out, monkeypatch=None):
 
 def test_counts(tmp_path, monkeypatch):
     ok, todo, _, _ = _app(tmp_path, monkeypatch)
-    assert (ok, todo) == (35, 2)
+    assert (ok, todo) == (37, 2)
 
 
 def test_routes(tmp_path, monkeypatch):
@@ -204,3 +204,15 @@ def test_joins(tmp_path, monkeypatch):
     rows = c.get("/api/joined").json()
     assert [(r["name"], r["amount"]) for r in rows] == [("Aoi", 150), ("Ren", 70)]   # join + qualified where/orderBy
     assert c.get("/api/joined-count").json() == {"n": 3}                              # leftJoin + count
+
+
+def test_with_eager_loading(tmp_path, monkeypatch):
+    _, _, c, _ = _app(tmp_path, monkeypatch)
+    c.post("/photos", json={"name": "Aoi", "email": "a@example.test"})
+    c.post("/photos", json={"name": "Ren", "email": "r@example.test"})
+    for uid, amount, st in ((1, 150, "paid"), (1, 20, "new"), (2, 70, "paid")):
+        c.post("/api/orders", json={"user_id": uid, "amount": amount, "status": st})
+    users = c.get("/api/users-with-orders").json()
+    assert [(u["name"], [o["amount"] for o in u["orders"]]) for u in users] == [("Aoi", [150, 20]), ("Ren", [70])]  # with() hasMany
+    orders = c.get("/api/orders-with-owner").json()
+    assert [o["user"]["name"] for o in orders] == ["Aoi", "Aoi", "Ren"]                                              # with() belongsTo

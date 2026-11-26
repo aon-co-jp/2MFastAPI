@@ -448,6 +448,18 @@ def _model_of_table(proj: "Project", table: str) -> Optional[str]:
 
 
 def _db_expr(e: str, ctx: "Ctx") -> Optional[Tuple[str, str]]:
+    """`with(..)` (eager loading) wraps the result of the chain in `_with(...)`."""
+    ctx.withs = []
+    r = _db_expr_core(e, ctx)
+    if r is None or not ctx.withs:
+        return r
+    code, kind = r
+    if not code.startswith(("_db_get(", "_db_first(", "_db_find(", "_db_find_or_404(")):
+        return None
+    return "_with(%s, [%s])" % (code, ", ".join(ctx.withs)), kind
+
+
+def _db_expr_core(e: str, ctx: "Ctx") -> Optional[Tuple[str, str]]:
     """Eloquent `Model::...` and `DB::table(..)->...` / `DB::select(..)` chains."""
     ctx.last_table = None
     m = re.match(r"\\?(?:App\\Models\\|Illuminate\\Support\\Facades\\)?([A-Z]\w*)::", e)
@@ -472,6 +484,18 @@ def _db_expr(e: str, ctx: "Ctx") -> Optional[Tuple[str, str]]:
     where, order, limit, joins = [], [], "None", []
     for i, (name, raw) in enumerate(calls):
         last = i == len(calls) - 1
+        if name == "with" and m.group(1) != "DB" and not last:
+            for rel in re.findall(r"""['"]([A-Za-z_]\w*)['"]""", raw):
+                hit = ctx.proj.relations.get((m.group(1), rel))
+                if not hit:
+                    return None
+                kind, target, fk = hit
+                if kind != "belongsTo":
+                    fk = fk or re.sub(r"(?<!^)([A-Z])", r"_", m.group(1)).lower() + "_id"
+                else:
+                    fk = fk or rel + "_id"
+                ctx.withs.append("(%r, %r, %r, %r)" % (rel, kind, ctx.proj.table_of(target), fk))
+            continue
         a = _args(raw, ctx)
         if a is None:
             return None
@@ -1064,6 +1088,18 @@ def _db_find(name, key):
     pk = list(t.primary_key.columns)[0]
     r = _rows(select(t).where(pk == key))
     return r[0] if r else None
+
+
+def _with(res, specs):
+    rows = [res] if isinstance(res, dict) else (res or [])
+    for rel, kind, table, fk in specs:
+        for r in rows:
+            if kind == "belongsTo":
+                r[rel] = _db_find(table, r.get(fk))
+            else:
+                kids = _db_get(_Q(table, [(fk, "=", r["id"])], [], None))
+                r[rel] = kids if kind == "hasMany" else (kids[0] if kids else None)
+    return res
 
 
 def _db_find_or_404(name, key):
