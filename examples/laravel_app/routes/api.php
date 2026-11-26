@@ -117,3 +117,18 @@ Route::get('/users-with-roles', function () {
 Route::get('/slots', function () {
     return view('slots');
 });
+
+Route::post('/cart/add', function (Request $request) {
+    $request->session()->put('cart', $request->input('item'));
+    $request->session()->flash('status', 'added');
+    return ['ok' => true];
+});
+
+Route::get('/cart', function (Request $request) {
+    return ['cart' => session('cart'), 'status' => session('status'), 'has' => $request->session()->has('cart')];
+});
+
+Route::post('/cart/clear', function (Request $request) {
+    $request->session()->forget('cart');
+    return ['cleared' => true];
+});

@@ -37,7 +37,7 @@ class PhotoController extends Controller
 
     public function edit(Request $request, $photo)
     {
-        $request->session()->flash('x', 1);
+        $request->file('avatar')->store('a');
         return 'never';
     }
 }

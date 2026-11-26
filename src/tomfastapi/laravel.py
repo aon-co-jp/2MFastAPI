@@ -573,6 +573,28 @@ def _db_expr_core(e: str, ctx: "Ctx") -> Optional[Tuple[str, str]]:
     return None
 
 
+def _session_call(name: str, raw: str, ctx: "Ctx") -> Optional[Tuple[str, str]]:
+    a = _args(raw, ctx)
+    if a is None:
+        return None
+    n = len(a)
+    ctx.uses_request = True
+    k = a[0][0] if a else ""
+    if name == "get" and n in (1, 2):
+        return "_sess_get(request, %s)" % ", ".join(x[0] for x in a), "any"
+    if name == "has" and n == 1:
+        return "(_sess_get(request, %s) is not None)" % k, "json"
+    if name == "pull" and n in (1, 2):
+        return "_sess_pull(request, %s)" % ", ".join(x[0] for x in a), "any"
+    if name == "all" and n == 0:
+        return "_sess_all(request)", "json"
+    if name in ("put", "flash") and n == 2:
+        return "_sess_%s(request, %s, %s)" % (name, k, a[1][0]), "json"
+    if name in ("forget", "remove") and n == 1:
+        return "_sess_forget(request, %s)" % k, "json"
+    return None
+
+
 def _relation(var: str, rel: str, ctx: "Ctx") -> Optional[Tuple[str, str]]:
     mdl = ctx.var_model.get(var)
     hit = ctx.proj.relations.get((mdl, rel)) if mdl else None
@@ -639,9 +661,22 @@ def _expr(e: str, ctx: Ctx) -> Optional[Tuple[str, str]]:
             return _interp(inner.replace('\\"', '"'), ctx)
         s = _php_str(e)
         return None if s is None else (repr(s), "str")
-    # $request->...
+    # session('k') / session(['k' => v]) / $request->session()->get|put|flash|forget|has|pull|all(..)
+    sm = re.fullmatch(r"session\((.*)\)", e, re.S)
+    if sm:
+        raw = sm.group(1).strip()
+        if raw.startswith("["):
+            a = _args(raw, ctx)
+            if a is None or len(a) != 1:
+                return None
+            ctx.uses_request = True
+            return "_sess_put_many(request, %s)" % a[0][0], "json"
+        return _session_call("get", raw, ctx)
     rq = ctx.request_var
     if rq:
+        sm = re.fullmatch(r"\$%s->session\(\)->(\w+)\((.*)\)" % rq, e, re.S)
+        if sm:
+            return _session_call(sm.group(1), sm.group(2), ctx)
         m = re.fullmatch(r"\$%s->all\(\)" % rq, e)
         if m:
             ctx.uses_body = True
@@ -753,7 +788,7 @@ def _statements(body: str, ctx: Ctx) -> Optional[List[str]]:
             continue
         if not last and not st.startswith("return"):
             x = _expr(st, ctx)  # statement used for its effect: $request->validate(..), DB::table(..)->insert(..)
-            if x is not None and x[1] != "resp" and ("_validate(" in x[0] or "_db_" in x[0]):
+            if x is not None and x[1] != "resp" and ("_validate(" in x[0] or "_db_" in x[0] or "_sess_" in x[0]):
                 lines.append(x[0])
                 continue
             return None
@@ -1285,6 +1320,58 @@ def _db_create(name, data):
     return _db_find(name, key) if key is not None else vals
 '''
 
+_SESSION_CODE = '''
+
+# ---- session (Laravel session()/$request->session()) on Starlette's signed-cookie session ----
+# Set APP_KEY in the environment; without it a random key is used and sessions end when the server restarts.
+import os as _os
+import secrets as _secrets
+from starlette.middleware.sessions import SessionMiddleware
+
+
+@app.middleware("http")
+async def _flash_age(request, call_next):          # flash data lives for the next request only, as in Laravel
+    s = request.session
+    s["_flash_old"] = s.pop("_flash_new", {})
+    return await call_next(request)
+
+
+app.add_middleware(SessionMiddleware, secret_key=_os.environ.get("APP_KEY") or _secrets.token_hex(32), same_site="lax")
+
+
+def _sess_get(request, key, default=None):
+    s = request.session
+    if key in s:
+        return s[key]
+    return s.get("_flash_old", {}).get(key, default)
+
+
+def _sess_put(request, key, value):
+    request.session[key] = value
+
+
+def _sess_put_many(request, data):
+    request.session.update(data)
+
+
+def _sess_flash(request, key, value):
+    request.session.setdefault("_flash_new", {})[key] = value
+
+
+def _sess_forget(request, key):
+    request.session.pop(key, None)
+
+
+def _sess_pull(request, key, default=None):
+    v = _sess_get(request, key, default)
+    request.session.pop(key, None)
+    return v
+
+
+def _sess_all(request):
+    return {k: v for k, v in request.session.items() if not k.startswith("_flash")}
+'''
+
 _VIEW_CODE = '''
 
 # ---- Blade -> Jinja2 (templates/ next to this file)
@@ -1417,6 +1504,8 @@ def translate(php: str, root: Optional[str] = None, sources: Optional[List[Tuple
         code += _DB_CODE.replace("%(tables)s", _tables_code(proj))
     if any("_render(" in l for l in body):
         code += _VIEW_CODE
+    if any("_sess_" in l for l in body):
+        code += _SESSION_CODE
     code += "\n\n" + "\n".join(body)
     code += ("\n# MFastAPI: speed up route lookup (Rust/Mojo/C core when available; otherwise it changes nothing).\n"
              "# Must run after every route is registered. Set MFASTAPI_DISABLE=1 to turn it off.\n"

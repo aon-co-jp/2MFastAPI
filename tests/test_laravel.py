@@ -21,7 +21,7 @@ def _app(out, monkeypatch=None):
 
 def test_counts(tmp_path, monkeypatch):
     ok, todo, _, _ = _app(tmp_path, monkeypatch)
-    assert (ok, todo) == (41, 2)
+    assert (ok, todo) == (44, 2)
 
 
 def test_routes(tmp_path, monkeypatch):
@@ -69,7 +69,7 @@ def test_eloquent_request_resource(tmp_path, monkeypatch):
     assert c.get("/photos/2").json()["email"] == "r@example.test"   # implicit model binding
     assert c.get("/photos/99").status_code == 404
     assert c.get("/photos/create").status_code == 501           # method missing in the controller
-    assert c.get("/photos/1/edit").status_code == 501           # $request->session() is not translated
+    assert c.get("/photos/1/edit").status_code == 501           # $request->file(..) is not translated
     assert c.post("/api/orders", json={"user_id": 1, "amount": 150, "status": "paid"}).json()["amount"] == 150
     c.post("/api/orders", json={"user_id": 1, "amount": 20, "status": "new"})
     assert [o["amount"] for o in c.get("/api/orders/status/new").json()] == [20]
@@ -234,3 +234,13 @@ def test_named_slots(tmp_path, monkeypatch):
     html = c.get("/api/slots").text
     assert '<div class="alert alert-ok"><b>Heads up</b> Body one</div>' in html      # <x-slot:title>
     assert '<div class="alert alert-info"><b>Second</b> Body two</div>' in html      # <x-slot name="title">
+
+
+def test_session_and_flash(tmp_path, monkeypatch):
+    _, _, c, _ = _app(tmp_path, monkeypatch)
+    assert c.get("/api/cart").json() == {"cart": None, "status": None, "has": False}
+    assert c.post("/api/cart/add", json={"item": "pen"}).json() == {"ok": True}      # put + flash
+    assert c.get("/api/cart").json() == {"cart": "pen", "status": "added", "has": True}   # flash visible on the next request
+    assert c.get("/api/cart").json() == {"cart": "pen", "status": None, "has": True}      # ...and gone after that
+    assert c.post("/api/cart/clear").json() == {"cleared": True}                          # forget
+    assert c.get("/api/cart").json()["cart"] is None
