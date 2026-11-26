@@ -592,6 +592,8 @@ def _session_call(name: str, raw: str, ctx: "Ctx") -> Optional[Tuple[str, str]]:
         return "_sess_%s(request, %s, %s)" % (name, k, a[1][0]), "json"
     if name in ("forget", "remove") and n == 1:
         return "_sess_forget(request, %s)" % k, "json"
+    if name in ("invalidate", "flush", "regenerate", "regenerateToken", "migrate") and n in (0, 1):
+        return "_sess_%s(request)" % ("flush" if name in ("invalidate", "flush") else "keep"), "json"
     return None
 
 
@@ -1366,6 +1368,14 @@ def _sess_pull(request, key, default=None):
     v = _sess_get(request, key, default)
     request.session.pop(key, None)
     return v
+
+
+def _sess_flush(request):
+    request.session.clear()
+
+
+def _sess_keep(request):             # regenerate(): the signed cookie holds the data, so the id has nothing to rotate
+    return None
 
 
 def _sess_all(request):

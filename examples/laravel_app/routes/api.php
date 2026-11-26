@@ -132,3 +132,9 @@ Route::post('/cart/clear', function (Request $request) {
     $request->session()->forget('cart');
     return ['cleared' => true];
 });
+
+Route::post('/cart/reset', function (Request $request) {
+    $request->session()->put('cart', 'x');
+    $request->session()->invalidate();
+    return ['reset' => true];
+});
