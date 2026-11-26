@@ -124,6 +124,8 @@ class Project:
         self.controllers: Dict[Tuple[str, str], Tuple[str, str]] = {}
         self.tables: Dict[str, List[Tuple[str, str]]] = {}   # table -> [(column, sqlalchemy type)]
         self.model_tables: Dict[str, str] = {}               # Model -> table (from app/Models $table)
+        self.models: List[str] = []
+        self.relations: Dict[Tuple[str, str], Tuple[str, str, Optional[str]]] = {}  # (Model, rel) -> (kind, Target, fk)
         self.views: Dict[str, str] = {}                      # 'a.b' -> jinja source
         self.view_warnings: Dict[str, List[str]] = {}
         if root:
@@ -151,6 +153,11 @@ class Project:
             tm = re.search(r"\$table\s*=\s*['\"](\w+)['\"]", src)
             if cm and tm:
                 self.model_tables[cm.group(1)] = tm.group(1)
+            if cm:
+                self.models.append(cm.group(1))
+                for rm in re.finditer(r"function\s+(\w+)\s*\(\s*\)\s*(?::\s*[\w\\]+\s*)?\{\s*return\s+\$this->(hasMany|hasOne|belongsTo)"
+                                      r"\(\s*\\?([\w\\]+)::class\s*(?:,\s*['\"](\w+)['\"])?", src):
+                    self.relations[(cm.group(1), rm.group(1))] = (rm.group(2), rm.group(3).split("\\")[-1], rm.group(4))
         for _p, src in self._php_files("database", "migrations"):
             for sm in re.finditer(r"Schema::create\s*\(\s*['\"](\w+)['\"]\s*,\s*function\s*\([^)]*\)\s*\{", src):
                 body, _ = _body(src, sm.end())
@@ -190,8 +197,47 @@ class Project:
 
 # ---------------------------------------------------------------- Blade -> Jinja2
 
+_LOOP = {"index": "loop.index0", "iteration": "loop.index", "first": "loop.first", "last": "loop.last",
+         "count": "loop.length", "remaining": "loop.revindex0", "depth": "loop.depth",
+         "even": "(loop.index is even)", "odd": "(loop.index is odd)"}
+
+
+def _camel(name: str) -> str:
+    return re.sub(r"-(\w)", lambda m: m.group(1).upper(), name)
+
+
+def _components(src: str, warns: List[str]) -> str:
+    """<x-alert type="e" :msg="$m">slot</x-alert> -> Jinja include of components/alert.html with those variables."""
+    attr_re = re.compile(r'(:?)([\w\-:.]+)(?:\s*=\s*"([^"]*)")?')
+
+    def call(name: str, attrs: str, slot: str) -> str:
+        sets = []
+        for am in attr_re.finditer(attrs):
+            bind, key, val = am.group(1), _camel(am.group(2)), am.group(3)
+            if not re.fullmatch(r"\w+", key):
+                warns.append("component attribute %s not converted" % am.group(2))
+                continue
+            if val is None:
+                sets.append("{%% set %s = true %%}" % key)
+            elif bind:
+                sets.append("{%% set %s = %s %%}" % (key, _blade_expr(val)))
+            else:
+                sets.append("{%% set %s = %r %%}" % (key, val))
+        tpl = "components/" + name.replace(".", "/") + ".html"
+        return "{%% with %%}{%% set slot %%}%s{%% endset %%}%s{%% include %r %%}{%% endwith %%}" % (slot, "".join(sets), tpl)
+
+    tag = r"<x-([\w.\-]+)((?:\s+:?[\w\-:.]+(?:\s*=\s*\"[^\"]*\")?)*)\s*"
+    prev = None
+    while prev != src:
+        prev = src
+        src = re.sub(tag + r"/>", lambda m: call(m.group(1), m.group(2), ""), src)
+        src = re.sub(tag + r">((?:(?!<x-).)*?)</x-\1>", lambda m: call(m.group(1), m.group(2), m.group(3)), src, flags=re.S)
+    return src
+
+
 def _blade_expr(e: str) -> str:
     e = e.strip()
+    e = re.sub(r"\$loop->(\w+)", lambda m: _LOOP.get(m.group(1), "loop." + m.group(1)), e)
     e = re.sub(r"count\(\s*(\$[\w>\-\[\]'\"]+)\s*\)", r"(\1)|length", e)
     e = e.replace("===", "==").replace("!==", "!=")
     e = e.replace("&&", " and ").replace("||", " or ")
@@ -201,13 +247,21 @@ def _blade_expr(e: str) -> str:
     parts = _split(e, ".")  # PHP concatenation `a . b` -> Jinja `a ~ b` (only spaced dots)
     if parts is not None and " . " in e:
         e = " ~ ".join(p.strip() for p in _split(e, " . ") or [e])
-    e = e.replace("null", "none").replace("true", "true")
+    e = re.sub(r"null", "none", e)
+    if "??" in e:  # PHP null coalescing: a ?? b
+        parts = [x.strip() for x in (_split(e, "??") or [e])]
+        if len(parts) == 2 and re.fullmatch(r"[\w.\[\]'\"]+", parts[0]):
+            e = "(%s if %s is defined and %s is not none else %s)" % (parts[0], parts[0], parts[0], parts[1])
     return re.sub(r"\s+", " ", e).strip()
 
 
 def blade_to_jinja(src: str) -> Tuple[str, List[str]]:
     """Convert a simple Blade template to Jinja2. Returns (jinja source, warnings)."""
     warns: List[str] = []
+    for lm in re.finditer(r"\$loop->(\w+)", src):
+        if lm.group(1) not in _LOOP:
+            warns.append("$loop->%s not converted" % lm.group(1))
+    src = _components(src, warns)
     out = re.sub(r"\{\{--(.*?)--\}\}", lambda m: "{#" + m.group(1) + "#}", src, flags=re.S)
     out = re.sub(r"\{!!(.*?)!!\}", lambda m: "{{ (" + _blade_expr(m.group(1)) + ")|safe }}", out, flags=re.S)
     out = re.sub(r"(?<!@)\{\{(?!#)(.*?)\}\}", lambda m: "{{ " + _blade_expr(m.group(1)) + " }}", out, flags=re.S)
@@ -262,6 +316,14 @@ def blade_to_jinja(src: str) -> Tuple[str, List[str]]:
             return "{%% block %s %%}" % _php_str(parts[0])
         if name in ("endsection", "show", "stop"):
             return "{% endblock %}"
+        if name == "props":
+            sets = []
+            for it in [x for x in (_split((arg or "").strip()[1:-1], ",") or []) if x.strip()]:
+                kv = _split(it, "=>")
+                if kv and len(kv) == 2:
+                    k = _php_str(kv[0])
+                    sets.append("{%% if %s is not defined %%}{%% set %s = %s %%}{%% endif %%}" % (k, k, _blade_expr(kv[1])))
+            return "".join(sets)
         if name == "csrf":
             warns.append("@csrf dropped (no CSRF token in the converted app)")
             return "{# @csrf not converted #}"
@@ -298,6 +360,8 @@ class Ctx:
         self.uses_request = False
         self.uses_db = False
         self.uses_view = False
+        self.var_model: Dict[str, str] = {}   # variable -> Eloquent model (for relations / update / delete)
+        self.last_table: Optional[str] = None
 
 
 def _interp(inner: str, ctx: Ctx) -> Optional[Tuple[str, str]]:
@@ -315,9 +379,6 @@ def _interp(inner: str, ctx: Ctx) -> Optional[Tuple[str, str]]:
     return " + ".join(parts), "str"
 
 
-_DB = re.compile(r"\\?(?:App\\Models\\)?([A-Z]\w*)::(\w+)\((.*)\)$", re.S)
-
-
 def _args(s: str, ctx: Ctx) -> Optional[List[Tuple[str, str]]]:
     if not s.strip():
         return []
@@ -333,42 +394,149 @@ def _args(s: str, ctx: Ctx) -> Optional[List[Tuple[str, str]]]:
     return out
 
 
-def _db_expr(e: str, ctx: Ctx) -> Optional[Tuple[str, str]]:
-    # Model::where(..)[->where(..)]->get()/first()
-    m = re.match(r"\\?(?:App\\Models\\)?([A-Z]\w*)::where\(", e)
-    if m:
-        table, rest, conds = ctx.proj.table_of(m.group(1)), e[m.end() - 1:], []
-        while rest.startswith("("):
-            inner, end = _body(rest, 1, "(", ")")
-            a = _args(inner, ctx)
-            if a is None or len(a) not in (2, 3):
-                return None
-            if len(a) == 2:
-                conds.append("(%s, '=', %s)" % (a[0][0], a[1][0]))
-            else:
-                conds.append("(%s, %s, %s)" % (a[0][0], a[1][0], a[2][0]))
-            rest = rest[end:].strip()
-            if rest.startswith("->where("):
-                rest = rest[len("->where"):]
-        fn = {"->get()": "_db_where", "->first()": "_db_first"}.get(rest.replace(" ", ""))
-        if not fn:
+_VALID_RULES = ("required", "nullable", "sometimes", "string", "integer", "numeric", "boolean", "email",
+                "min", "max", "in", "bail")
+
+
+def _rules(e: str) -> Optional[str]:
+    """['f' => 'required|max:5', 'g' => ['nullable', 'email']] -> python dict of rule lists, or None."""
+    e = e.strip()
+    if not (e.startswith("[") and e.endswith("]")):
+        return None
+    out = []
+    for it in [x for x in (_split(e[1:-1], ",") or []) if x.strip()]:
+        kv = _split(it, "=>")
+        if not kv or len(kv) != 2 or _php_str(kv[0]) is None:
             return None
-        ctx.uses_db = True
-        return "%s(%r, [%s])" % (fn, table, ", ".join(conds)), "json"
-    m = _DB.fullmatch(e)
-    if not m or m.group(1) in ("Route", "Str", "Arr", "Auth", "DB", "Request"):
+        v = kv[1].strip()
+        if v.startswith("["):
+            rs = [_php_str(x) for x in (_split(v[1:-1], ",") or []) if x.strip()]
+        else:
+            s = _php_str(v)
+            rs = s.split("|") if s is not None else [None]
+        if not rs or None in rs or any(r.split(":")[0] not in _VALID_RULES for r in rs):
+            return None
+        out.append("%r: %r" % (_php_str(kv[0]), rs))
+    return "{" + ", ".join(out) + "}"
+
+
+def _calls(s: str) -> Optional[List[Tuple[str, str]]]:
+    """'a(x)->b()->c(1, 2)' -> [('a','x'), ('b',''), ('c','1, 2')]."""
+    out, pos = [], 0
+    while pos < len(s):
+        m = re.match(r"\s*(\w+)\s*\(", s[pos:])
+        if not m:
+            return None
+        inner, end = _body(s, pos + m.end(), "(", ")")
+        out.append((m.group(1), inner))
+        pos = end
+        t = re.match(r"\s*->\s*", s[pos:])
+        if t:
+            pos += t.end()
+        elif s[pos:].strip():
+            return None
+        else:
+            break
+    return out
+
+
+def _model_of_table(proj: "Project", table: str) -> Optional[str]:
+    for mdl in proj.models:
+        if proj.table_of(mdl) == table:
+            return mdl
+    return None
+
+
+def _db_expr(e: str, ctx: "Ctx") -> Optional[Tuple[str, str]]:
+    """Eloquent `Model::...` and `DB::table(..)->...` / `DB::select(..)` chains."""
+    ctx.last_table = None
+    m = re.match(r"\\?(?:App\\Models\\|Illuminate\\Support\\Facades\\)?([A-Z]\w*)::", e)
+    if not m or m.group(1) in ("Route", "Str", "Arr", "Auth", "Request", "Hash", "Log", "Cache", "Validator"):
         return None
-    model, meth, raw = m.group(1), m.group(2), m.group(3)
-    a = _args(raw, ctx)
-    if a is None:
+    calls = _calls(e[m.end():])
+    if not calls:
         return None
-    table = ctx.proj.table_of(model)
-    fn = {"all": ("_db_all", 0), "find": ("_db_find", 1), "findOrFail": ("_db_find_or_404", 1),
-          "create": ("_db_create", 1)}.get(meth)
-    if not fn or len(a) != fn[1]:
+    if m.group(1) == "DB":
+        name, raw = calls[0]
+        if name == "select" and len(calls) == 1:
+            a = _args(raw, ctx)
+            if a is None or len(a) not in (1, 2) or a[0][1] != "str":
+                return None
+            ctx.uses_db = True
+            return "_db_raw(%s%s)" % (a[0][0], (", " + a[1][0]) if len(a) == 2 else ""), "json"
+        if name != "table" or _php_str(raw) is None:
+            return None
+        table, calls = _php_str(raw), calls[1:]
+    else:
+        table = ctx.proj.table_of(m.group(1))
+    where, order, limit = [], [], "None"
+    for i, (name, raw) in enumerate(calls):
+        last = i == len(calls) - 1
+        a = _args(raw, ctx)
+        if a is None:
+            return None
+        q = "_Q(%r, [%s], [%s], %s)" % (table, ", ".join(where), ", ".join(order), limit)
+        if name == "where" and len(a) in (2, 3):
+            where.append("(%s, '=', %s)" % (a[0][0], a[1][0]) if len(a) == 2 else "(%s, %s, %s)" % (a[0][0], a[1][0], a[2][0]))
+        elif name == "orderBy" and len(a) in (1, 2):
+            order.append("(%s, %s)" % (a[0][0], a[1][0] if len(a) == 2 else "'asc'"))
+        elif name in ("latest", "oldest") and len(a) <= 1:
+            order.append("(%s, %r)" % (a[0][0] if a else "'created_at'", "desc" if name == "latest" else "asc"))
+        elif name in ("limit", "take") and len(a) == 1:
+            limit = a[0][0]
+        elif not last:
+            return None
+        elif name in ("get", "all") and not a:
+            ctx.uses_db = True
+            return "_db_get(%s)" % q, "json"
+        elif name == "first" and not a:
+            ctx.uses_db, ctx.last_table = True, table
+            return "_db_first(%s)" % q, "json"
+        elif name == "count" and not a:
+            ctx.uses_db = True
+            return "_db_count(%s)" % q, "num"
+        elif name == "exists" and not a:
+            ctx.uses_db = True
+            return "(_db_count(%s) > 0)" % q, "json"
+        elif name == "pluck" and len(a) == 1:
+            ctx.uses_db = True
+            return "[r[%s] for r in _db_get(%s)]" % (a[0][0], q), "json"
+        elif name in ("find", "findOrFail") and len(a) == 1 and not where:
+            ctx.uses_db, ctx.last_table = True, table
+            return "%s(%r, %s)" % ("_db_find" if name == "find" else "_db_find_or_404", table, a[0][0]), "json"
+        elif name == "create" and len(a) == 1 and not where:
+            ctx.uses_db, ctx.last_table = True, table
+            return "_db_create(%r, %s)" % (table, a[0][0]), "json"
+        elif name == "insert" and len(a) == 1 and not where:
+            ctx.uses_db = True
+            return "_db_insert(%r, %s)" % (table, a[0][0]), "json"
+        elif name == "update" and len(a) == 1:
+            ctx.uses_db = True
+            return "_db_update_q(%s, %s)" % (q, a[0][0]), "num"
+        elif name == "delete" and not a:
+            ctx.uses_db = True
+            return "_db_delete_q(%s)" % q, "num"
+        elif name == "destroy" and len(a) == 1 and not where:
+            ctx.uses_db = True
+            return "_db_destroy(%r, %s)" % (table, a[0][0]), "num"
+        else:
+            return None
+    return None
+
+
+def _relation(var: str, rel: str, ctx: "Ctx") -> Optional[Tuple[str, str]]:
+    mdl = ctx.var_model.get(var)
+    hit = ctx.proj.relations.get((mdl, rel)) if mdl else None
+    if not hit:
         return None
+    kind, target, fk = hit
     ctx.uses_db = True
-    return "%s(%r%s)" % (fn[0], table, "".join(", " + x[0] for x in a)), "json"
+    tt = ctx.proj.table_of(target)
+    if kind == "belongsTo":
+        return "_db_find(%r, %s[%r])" % (tt, var, fk or rel + "_id"), "json"
+    fk = fk or re.sub(r"(?<!^)([A-Z])", r"_\1", mdl).lower() + "_id"
+    q = "_Q(%r, [(%r, '=', %s['id'])], [], None)" % (tt, fk, var)
+    return ("_db_get(%s)" if kind == "hasMany" else "_db_first(%s)") % q, "json"
 
 
 def _expr(e: str, ctx: Ctx) -> Optional[Tuple[str, str]]:
@@ -440,7 +608,17 @@ def _expr(e: str, ctx: Ctx) -> Optional[Tuple[str, str]]:
     if m:
         v = m.group(1)
         return (v, ctx.vars[v]) if v in ctx.vars else None
+    if rq:
+        m = re.fullmatch(r"\$%s->validate\((.*)\)" % rq, e, re.S)
+        if m:
+            rules = _rules(m.group(1))
+            if rules is None:
+                return None
+            ctx.uses_body = True
+            return "_validate(_body, %s)" % rules, "json"
     m = re.fullmatch(r"\$(\w+)->(\w+)", e)
+    if m and m.group(1) in ctx.vars and (m.group(1), m.group(2)) and _relation(m.group(1), m.group(2), ctx):
+        return _relation(m.group(1), m.group(2), ctx)
     if m and m.group(1) in ctx.vars:
         return "%s[%r]" % (m.group(1), m.group(2)), "any"
     m = re.fullmatch(r"compact\((.*)\)", e, re.S)
@@ -485,14 +663,48 @@ def _statements(body: str, ctx: Ctx) -> Optional[List[str]]:
             msg = _expr(m.group(2), ctx) if m.group(2) else None
             lines.append("raise HTTPException(status_code=%s%s)" % (m.group(1), (", detail=" + msg[0]) if msg else ""))
             continue
+        m = re.fullmatch(r"\$(\w+)->(update|delete|save)\((.*)\)", st, re.S)
+        if m and m.group(1) in ctx.var_model and not last:
+            v, op = m.group(1), m.group(2)
+            t = ctx.proj.table_of(ctx.var_model[v])
+            if op == "update":
+                x = _expr(m.group(3), ctx)
+                if x is None:
+                    return None
+                lines.append("%s = _db_update_row(%r, %s, %s)" % (v, t, v, x[0]))
+            elif op == "delete" and not m.group(3).strip():
+                lines.append("_db_delete_row(%r, %s)" % (t, v))
+            elif op == "save" and not m.group(3).strip():
+                lines.append("%s = _db_save(%r, %s)" % (v, t, v))
+            else:
+                return None
+            continue
+        m = re.fullmatch(r"\$(\w+)->(\w+)\s*=\s*(.+)", st, re.S)
+        if m and m.group(1) in ctx.var_model and not last and not m.group(3).startswith("="):
+            x = _expr(m.group(3), ctx)
+            if x is None:
+                return None
+            lines.append("%s[%r] = %s" % (m.group(1), m.group(2), x[0]))
+            continue
         m = re.fullmatch(r"\$(\w+)\s*=\s*(.+)", st, re.S)
         if m and not last and not m.group(2).startswith("="):
             x = _expr(m.group(2), ctx)
             if x is None or x[1] == "resp":
                 return None
             ctx.vars[m.group(1)] = x[1]
+            mdl = _model_of_table(ctx.proj, ctx.last_table) if ctx.last_table else None
+            if mdl:
+                ctx.var_model[m.group(1)] = mdl
+            else:
+                ctx.var_model.pop(m.group(1), None)
             lines.append("%s = %s" % (m.group(1), x[0]))
             continue
+        if not last and not st.startswith("return"):
+            x = _expr(st, ctx)  # statement used for its effect: $request->validate(..), DB::table(..)->insert(..)
+            if x is not None and x[1] != "resp" and ("_validate(" in x[0] or "_db_" in x[0]):
+                lines.append(x[0])
+                continue
+            return None
         m = re.fullmatch(r"return\s+(.+)", st, re.S)
         if m and last:
             x = _expr(m.group(1), ctx)
@@ -744,6 +956,70 @@ async def _read_body(request):
     elif raw and "x-www-form-urlencoded" in ctype:
         data.update(parse_qsl(raw.decode("utf-8", "replace")))
     return data
+
+
+class _ValidationError(Exception):
+    def __init__(self, errors):
+        self.errors = errors
+
+
+@app.exception_handler(_ValidationError)
+async def _validation_error(request, exc):
+    msgs = [m for ms in exc.errors.values() for m in ms]
+    extra = len(msgs) - 1
+    message = msgs[0] + ((" (and %d more error%s)" % (extra, "s" if extra > 1 else "")) if extra else "")
+    return JSONResponse({"message": message, "errors": exc.errors}, status_code=422)
+
+
+def _validate(data, rules):
+    """Laravel $request->validate(): 422 {"message", "errors"} on failure, validated fields on success."""
+    import re as _re
+    errors, out = {}, {}
+    for field, rs in rules.items():
+        label = field.replace("_", " ")
+        names = [r.split(":")[0] for r in rs]
+        v = data.get(field)
+        if v is None or v == "":
+            if "required" in names:
+                errors.setdefault(field, []).append("The %s field is required." % label)
+            elif field in data and "nullable" in names:
+                out[field] = None
+            continue
+        numeric = "integer" in names or "numeric" in names
+        err = []
+        for r in rs:
+            n, _, arg = r.partition(":")
+            s = str(v)
+            if n == "string" and not isinstance(v, str):
+                err.append("The %s field must be a string." % label)
+            elif n == "integer" and (isinstance(v, bool) or not _re.fullmatch(r"-?\\d+", s)):
+                err.append("The %s field must be an integer." % label)
+            elif n == "numeric" and (isinstance(v, bool) or not _re.fullmatch(r"-?\\d+(\\.\\d+)?", s)):
+                err.append("The %s field must be a number." % label)
+            elif n == "boolean" and v not in (True, False, 0, 1, "0", "1"):
+                err.append("The %s field must be true or false." % label)
+            elif n == "email" and not _re.fullmatch(r"[^@\\s]+@[^@\\s]+\\.[^@\\s]+", s):
+                err.append("The %s field must be a valid email address." % label)
+            elif n == "in" and s not in arg.split(","):
+                err.append("The selected %s is invalid." % label)
+            elif n in ("min", "max"):
+                try:
+                    size = float(s) if numeric else len(v) if isinstance(v, (str, list, dict)) else float(s)
+                except ValueError:
+                    continue
+                lim = float(arg)
+                unit = "" if numeric or not isinstance(v, str) else " characters"
+                if n == "min" and size < lim:
+                    err.append("The %s field must be at least %s%s." % (label, arg, unit))
+                if n == "max" and size > lim:
+                    err.append("The %s field must not be greater than %s%s." % (label, arg, unit))
+        if err:
+            errors[field] = err
+        else:
+            out[field] = v
+    if errors:
+        raise _ValidationError(errors)
+    return out
 '''
 
 _DB_CODE = '''
@@ -751,7 +1027,7 @@ _DB_CODE = '''
 # ---- Eloquent -> SQLAlchemy Core (tables from database/migrations; DATABASE_URL, default sqlite file)
 import datetime as _dt
 from sqlalchemy import (JSON, Boolean, Column, Date, DateTime, Float, Integer, MetaData, String, Table, Text,
-                        create_engine, insert, select)
+                        create_engine, delete, insert, select, update)
 
 _engine = create_engine(os.environ.get("DATABASE_URL", "sqlite:///laravel.db"))
 _meta = MetaData()
@@ -789,29 +1065,109 @@ def _db_find_or_404(name, key):
 
 
 _OPS = {"=": "__eq__", "==": "__eq__", "!=": "__ne__", "<>": "__ne__", "<": "__lt__", ">": "__gt__",
-        "<=": "__le__", ">=": "__ge__"}
+        "<=": "__le__", ">=": "__ge__", "like": "like"}
 
 
-def _db_where(name, conds):
-    t = _t(name)
-    stmt = select(t)
-    for col, op, val in conds:
-        stmt = stmt.where(getattr(t.c[col], _OPS[op])(val))
+def _Q(name, where, order, limit):
+    return {"t": name, "where": where, "order": order, "limit": limit}
+
+
+def _apply(q, stmt):
+    t = _t(q["t"])
+    for col, op, val in q["where"]:
+        stmt = stmt.where(getattr(t.c[col], _OPS[op.lower()])(val))
+    return stmt
+
+
+def _db_get(q):
+    t = _t(q["t"])
+    stmt = _apply(q, select(t))
+    for col, d in q["order"]:
+        stmt = stmt.order_by(t.c[col].desc() if str(d).lower() == "desc" else t.c[col].asc())
+    if q["limit"] is not None:
+        stmt = stmt.limit(int(q["limit"]))
     return _rows(stmt)
 
 
-def _db_first(name, conds):
-    r = _db_where(name, conds)
+def _db_first(q):
+    r = _db_get(dict(q, limit=1))
     return r[0] if r else None
+
+
+def _db_count(q):
+    from sqlalchemy import func
+    with _engine.connect() as c:
+        return c.execute(_apply(q, select(func.count()).select_from(_t(q["t"])))).scalar()
+
+
+def _cols(t, data, now_cols=("updated_at",)):
+    vals = {k: v for k, v in dict(data).items() if k in t.c and not t.c[k].primary_key}
+    now = _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None)
+    for k in now_cols:
+        if k in t.c and k not in vals:
+            vals[k] = now
+    return vals
+
+
+def _db_insert(name, data):
+    rows = data if isinstance(data, list) else [data]
+    t = _t(name)
+    with _engine.begin() as c:
+        for r in rows:
+            c.execute(insert(t).values(**{k: v for k, v in dict(r).items() if k in t.c}))
+    return True
+
+
+def _db_update_q(q, data):
+    t = _t(q["t"])
+    with _engine.begin() as c:
+        return c.execute(_apply(q, update(t)).values(**_cols(t, data))).rowcount
+
+
+def _db_delete_q(q):
+    with _engine.begin() as c:
+        return c.execute(_apply(q, delete(_t(q["t"])))).rowcount
+
+
+def _pk(name):
+    return list(_t(name).primary_key.columns)[0].name
+
+
+def _db_destroy(name, keys):
+    keys = keys if isinstance(keys, list) else [keys]
+    return sum(_db_delete_q(_Q(name, [(_pk(name), "=", k)], [], None)) for k in keys)
+
+
+def _db_update_row(name, row, data):
+    _db_update_q(_Q(name, [(_pk(name), "=", row[_pk(name)])], [], None), data)
+    return _db_find(name, row[_pk(name)])
+
+
+def _db_save(name, row):
+    return _db_update_row(name, row, {k: v for k, v in row.items() if k != "updated_at"})  # like Eloquent: touch updated_at
+
+
+def _db_delete_row(name, row):
+    return _db_delete_q(_Q(name, [(_pk(name), "=", row[_pk(name)])], [], None))
+
+
+def _db_raw(sql, bindings=()):
+    """DB::select('... where a = ? and b = ?', [x, y]) -- positional ? bindings only."""
+    from sqlalchemy import text
+    params, parts = {}, sql.split("?")
+    if len(parts) - 1 != len(bindings):
+        raise HTTPException(status_code=500, detail="DB::select binding count mismatch")
+    out = parts[0]
+    for i, b in enumerate(bindings):
+        params["p%d" % i] = b
+        out += ":p%d" % i + parts[i + 1]
+    with _engine.connect() as c:
+        return [dict(r._mapping) for r in c.execute(text(out), params)]
 
 
 def _db_create(name, data):
     t = _t(name)
-    vals = {k: v for k, v in dict(data).items() if k in t.c and not t.c[k].primary_key}
-    now = _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None)
-    for k in ("created_at", "updated_at"):
-        if k in t.c and k not in vals:
-            vals[k] = now
+    vals = _cols(t, data, ("created_at", "updated_at"))
     with _engine.begin() as c:
         res = c.execute(insert(t).values(**vals))
         key = res.inserted_primary_key[0] if res.inserted_primary_key else None
@@ -884,6 +1240,7 @@ def _route_code(r: Route, n: int, proj: Project) -> Tuple[List[str], bool]:
             if a in models:
                 ctx.uses_db = True
                 ctx.vars[p] = "json"
+                ctx.var_model[p] = models[a]
                 pre.append("%s = _db_find_or_404(%r, %s)  # implicit model binding: %s $%s" % (p, proj.table_of(models[a]), p, models[a], a))
         if req:
             body = re.sub(r"\$%s\b" % re.escape(req), "$" + req, body)
@@ -946,7 +1303,7 @@ def translate(php: str, root: Optional[str] = None, sources: Optional[List[Tuple
         uses_db = uses_db or any("_db_" in l for l in lines)
     code = _HEADER
     if uses_db:
-        code += _DB_CODE % {"tables": _tables_code(proj)}
+        code += _DB_CODE.replace("%(tables)s", _tables_code(proj))
     if any("_render(" in l for l in body):
         code += _VIEW_CODE
     code += "\n\n" + "\n".join(body)

@@ -22,9 +22,22 @@ class PhotoController extends Controller
         return response()->json($user, 201);
     }
 
-    public function update(Request $request, $photo)
+    public function update(Request $request, User $photo)
     {
-        DB::table('users')->update($request->all());
-        return 'ok';
+        $data = $request->validate(['name' => 'required|string|max:20', 'email' => ['nullable', 'email']]);
+        $photo->update($data);
+        return $photo;
+    }
+
+    public function destroy($photo)
+    {
+        User::destroy($photo);
+        return response()->json(['deleted' => $photo], 200);
+    }
+
+    public function edit(Request $request, $photo)
+    {
+        $request->session()->flash('x', 1);
+        return 'never';
     }
 }

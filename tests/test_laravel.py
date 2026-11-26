@@ -21,7 +21,7 @@ def _app(out, monkeypatch=None):
 
 def test_counts(tmp_path, monkeypatch):
     ok, todo, _, _ = _app(tmp_path, monkeypatch)
-    assert (ok, todo) == (22, 5)
+    assert (ok, todo) == (32, 2)
 
 
 def test_routes(tmp_path, monkeypatch):
@@ -29,7 +29,10 @@ def test_routes(tmp_path, monkeypatch):
     assert c.get("/").text == "Hello from Laravel"
     assert c.get("/hello/Taro").text == "Hello, Taro!"
     assert c.get("/api/users/7").json() == {"id": "7", "role": "member"}
-    assert c.post("/api/legacy").status_code == 501          # $request->validate(...) is not translated
+    r = c.post("/api/legacy")                                  # $request->validate([...]) -> Laravel-style 422
+    assert r.status_code == 422 and r.json() == {"message": "The name field is required.",
+                                                 "errors": {"name": ["The name field is required."]}}
+    assert c.post("/api/legacy", json={"name": "a"}).text == "x"
 
 
 def test_controllers_groups_interpolation(tmp_path, monkeypatch):
@@ -66,7 +69,7 @@ def test_eloquent_request_resource(tmp_path, monkeypatch):
     assert c.get("/photos/2").json()["email"] == "r@example.test"   # implicit model binding
     assert c.get("/photos/99").status_code == 404
     assert c.get("/photos/create").status_code == 501           # method missing in the controller
-    assert c.put("/photos/1").status_code == 501 and c.patch("/photos/1").status_code == 501
+    assert c.get("/photos/1/edit").status_code == 501           # $request->session() is not translated
     assert c.post("/api/orders", json={"user_id": 1, "amount": 150, "status": "paid"}).json()["amount"] == 150
     c.post("/api/orders", json={"user_id": 1, "amount": 20, "status": "new"})
     assert [o["amount"] for o in c.get("/api/orders/status/new").json()] == [20]
@@ -126,3 +129,54 @@ def test_group_array_and_api_resource():
 def test_cli(tmp_path):
     assert main(["laravel", EX, "-o", str(tmp_path)]) == 0
     assert (tmp_path / "main.py").exists() and (tmp_path / "templates" / "layouts" / "app.html").exists()
+
+
+def test_validate_update_delete(tmp_path, monkeypatch):
+    _, _, c, _ = _app(tmp_path, monkeypatch)
+    c.post("/photos", json={"name": "Aoi", "email": "a@example.test"})
+    r = c.put("/photos/1", json={"name": "x" * 21, "email": "bad"})
+    assert r.status_code == 422
+    assert r.json()["errors"] == {"name": ["The name field must not be greater than 20 characters."],
+                                  "email": ["The email field must be a valid email address."]}
+    assert r.json()["message"] == "The name field must not be greater than 20 characters. (and 1 more error)"
+    r = c.patch("/photos/1", json={"name": "Aoi2", "email": None, "id": 99})
+    assert r.status_code == 200 and r.json()["name"] == "Aoi2" and r.json()["id"] == 1  # $photo->update($data)
+    assert r.json()["email"] is None
+    assert c.put("/photos/99", json={"name": "z"}).status_code == 404
+    assert c.delete("/photos/1").json() == {"deleted": "1"}          # User::destroy($photo)
+    assert c.get("/photos/1").status_code == 404
+
+
+def test_relations_and_db_builder(tmp_path, monkeypatch):
+    _, _, c, _ = _app(tmp_path, monkeypatch)
+    c.post("/photos", json={"name": "Aoi", "email": "a@example.test"})
+    c.post("/photos", json={"name": "Ren", "email": "r@example.test"})
+    for uid, amount, st in ((1, 150, "paid"), (1, 20, "new"), (2, 70, "paid")):
+        c.post("/api/orders", json={"user_id": uid, "amount": amount, "status": st})
+    assert [o["amount"] for o in c.get("/api/users/1/orders").json()] == [150, 20]   # hasMany
+    assert c.get("/api/users/2/orders").json()[0]["amount"] == 70
+    assert c.get("/api/orders/3/owner").json()["name"] == "Ren"                       # belongsTo
+    assert c.get("/api/users/9/orders").status_code == 404
+    before = c.get("/api/orders/2").json()["updated_at"]
+    paid = c.post("/api/orders/2/pay").json()                                         # $m->col = ..; save()
+    assert paid["status"] == "paid" and paid["updated_at"] > before
+    rep = c.get("/api/report").json()
+    assert rep["count"] == 3 and rep["top"] == [150, 70]
+    assert rep["raw"] == [{"status": "paid", "n": 3}]                                  # DB::select with ? bindings
+    c.post("/api/orders", json={"user_id": 2, "amount": 1, "status": "new"})
+    assert c.post("/api/orders/close").json() == {"closed": 1}                       # where()->update()
+    assert c.get("/api/orders/status/closed").json()[0]["amount"] == 1
+    assert c.get("/api/orders/status/tiny").json()[0]["amount"] == 5                 # DB::table()->insert()
+    assert c.delete("/api/orders/1").status_code == 204                               # $m->delete()
+    assert c.get("/api/orders/1").status_code == 404
+
+
+def test_blade_components_and_loop(tmp_path, monkeypatch):
+    _, _, c, _ = _app(tmp_path, monkeypatch)
+    c.post("/photos", json={"name": "<Aoi>", "email": "a@example.test"})
+    for amount, st in ((150, "paid"), (20, "new")):
+        c.post("/api/orders", json={"user_id": 1, "amount": amount, "status": st})
+    html = c.get("/api/users/1/page").text
+    assert '<div class="alert alert-warn"><b>&lt;Aoi&gt;</b> 2 orders</div>' in html     # <x-alert> + slot
+    assert '<div class="alert alert-info"></div>' in html                                # @props default
+    assert '<li data-i="0">1/2 paid</li>' in html and '<li data-i="1">2/2 new (last)</li>' in html  # $loop
