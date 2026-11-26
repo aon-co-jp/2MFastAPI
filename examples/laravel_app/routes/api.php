@@ -9,3 +9,5 @@ Route::post('/orders', function (Request $request) {
     $o = Order::create($request->all());
     return $o;
 });
+
+Route::post('/users', [UserController::class, 'store']);

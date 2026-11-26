@@ -37,3 +37,7 @@
 ## 2026-11-25 Laravel ルート変換 / Laravel route conversion
 **日本語**: `src/tomfastapi/laravel.py` と `laravel` サブコマンドを追加。試験4件成功、サンプルを uvicorn(素の FastAPI)で起動し curl で確認済み。未了: コントローラー(`[Controller::class, 'm']`)、`Route::group`/`prefix`、`"$var"` 展開、MFastAPI の accelerate 適用での起動確認。
 **English**: Added `src/tomfastapi/laravel.py` and the `laravel` subcommand. 4 tests pass; the sample ran under uvicorn (plain FastAPI) and was checked with curl. Open: controllers, `Route::group`/`prefix`, `"$var"` interpolation, a run with MFastAPI accelerate applied.
+
+## 2026-11-26 Laravel 変換の拡張 / Laravel conversion extended
+**日本語**: `laravel.py` を、ルートを一覧にしてから出力する形に作り直し、コントローラー(配列形式と `@` 形式)・`Route::prefix()->group()`(入れ子)・`"$var"`/`"{$var}"` 展開・出力末尾の `mfastapi.accelerate(app)` を追加。試験12件成功、WSL uvicorn+curl で確認、`mfastapi.backend()`=`rust`。未了: `Route::middleware`/`name`/`controller()->group`、`Route::resource`、`Request` を使う本体、Eloquent・Blade、リクエストごとの Rust 経路と速度の計測。
+**English**: `laravel.py` now collects routes first and then emits them; added controllers (array and `@` forms), nested `Route::prefix()->group()`, `"$var"`/`"{$var}"` interpolation and a trailing `mfastapi.accelerate(app)`. 12 tests pass; checked with uvicorn + curl in WSL; `mfastapi.backend()` = `rust`. Open: `Route::middleware`/`name`/`controller()->group`, `Route::resource`, bodies using `Request`, Eloquent and Blade, measuring the per-request Rust path and speed.
