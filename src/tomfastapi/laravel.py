@@ -218,8 +218,13 @@ def _components(src: str, warns: List[str]) -> str:
     """<x-alert type="e" :msg="$m">slot</x-alert> -> Jinja include of components/alert.html with those variables."""
     attr_re = re.compile(r'(:?)([\w\-:.]+)(?:\s*=\s*"([^"]*)")?')
 
+    slot_re = re.compile(r"@@SLOT\[([\w\-]+)\]@@(.*?)@@/SLOT@@", re.S)
+
     def call(name: str, attrs: str, slot: str) -> str:
         sets = []
+        for sn, sb in slot_re.findall(slot):          # <x-slot:title>..</x-slot> -> a variable `title`
+            sets.append("{%% set %s %%}%s{%% endset %%}" % (_camel(sn), sb))
+        slot = slot_re.sub("", slot)
         for am in attr_re.finditer(attrs):
             bind, key, val = am.group(1), _camel(am.group(2)), am.group(3)
             if not re.fullmatch(r"\w+", key):
@@ -234,6 +239,7 @@ def _components(src: str, warns: List[str]) -> str:
         tpl = "components/" + name.replace(".", "/") + ".html"
         return "{%% with %%}{%% set slot %%}%s{%% endset %%}%s{%% include %r %%}{%% endwith %%}" % (slot, "".join(sets), tpl)
 
+    src = re.sub(r"<x-slot(?::|\s+name=\")([\w\-]+)\"?\s*>(.*?)</x-slot>", lambda m: "@@SLOT[%s]@@%s@@/SLOT@@" % (m.group(1), m.group(2)), src, flags=re.S)
     tag = r"<x-([\w.\-]+)((?:\s+:?[\w\-:.]+(?:\s*=\s*\"[^\"]*\")?)*)\s*"
     prev = None
     while prev != src:

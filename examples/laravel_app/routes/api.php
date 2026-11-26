@@ -113,3 +113,7 @@ Route::get('/users/{user}/roles', function (User $user) {
 Route::get('/users-with-roles', function () {
     return User::with('roles')->get();
 });
+
+Route::get('/slots', function () {
+    return view('slots');
+});

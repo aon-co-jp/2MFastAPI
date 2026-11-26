@@ -21,7 +21,7 @@ def _app(out, monkeypatch=None):
 
 def test_counts(tmp_path, monkeypatch):
     ok, todo, _, _ = _app(tmp_path, monkeypatch)
-    assert (ok, todo) == (40, 2)
+    assert (ok, todo) == (41, 2)
 
 
 def test_routes(tmp_path, monkeypatch):
@@ -227,3 +227,10 @@ def test_belongs_to_many(tmp_path, monkeypatch):
     assert [r["name"] for r in c.get("/api/users/2/roles").json()] == ["editor"]
     users = c.get("/api/users-with-roles").json()                                              # with('roles')
     assert [(u["name"], [r["name"] for r in u["roles"]]) for u in users] == [("Aoi", ["admin", "editor"]), ("Ren", ["editor"])]
+
+
+def test_named_slots(tmp_path, monkeypatch):
+    _, _, c, _ = _app(tmp_path, monkeypatch)
+    html = c.get("/api/slots").text
+    assert '<div class="alert alert-ok"><b>Heads up</b> Body one</div>' in html      # <x-slot:title>
+    assert '<div class="alert alert-info"><b>Second</b> Body two</div>' in html      # <x-slot name="title">
