@@ -693,6 +693,12 @@ def _expr(e: str, ctx: Ctx) -> Optional[Tuple[str, str]]:
             ctx.uses_request = True
             return "_sess_put_many(request, %s)" % a[0][0], "json"
         return _session_call("get", raw, ctx)
+    bm = re.fullmatch(r"(?:back\(\)|redirect\(\)->back\(\))(->withInput\(\))?", e)
+    if bm:
+        ctx.uses_request = True
+        if bm.group(1):
+            ctx.uses_body = True
+        return "_sess_back(request, %s)" % ("_body" if bm.group(1) else "None"), "resp"
     om = re.fullmatch(r"old\((.*)\)", e, re.S)
     if om:
         a = _args(om.group(1), ctx) if om.group(1).strip() else []
@@ -1333,6 +1339,10 @@ def _db_insert(name, data):
 
 def _db_pivot(pivot, f1, f2, key, mode, ids, extra=None):
     t = _t(pivot)
+    per = {}
+    if isinstance(ids, dict):                                  # sync([1 => ['col' => v]]): keys are ids, values are pivot columns
+        per = {(int(k) if isinstance(k, str) and k.lstrip('-').isdigit() else k): v for k, v in ids.items()}
+        ids = list(per)
     ids = [] if ids is None else (list(ids) if isinstance(ids, (list, tuple)) else [ids])
     ids = [int(i) if isinstance(i, str) and i.lstrip('-').isdigit() else i for i in ids]   # path parameters arrive as strings
     with _engine.begin() as c:
@@ -1345,8 +1355,11 @@ def _db_pivot(pivot, f1, f2, key, mode, ids, extra=None):
             c.execute(delete(t).where(t.c[f1] == key, *([t.c[f2].in_(ids)] if ids else [])))
         else:
             for i in ids:
+                ex = {k: v for k, v in {**(extra or {}), **(per.get(i) or {})}.items() if k in t.c}
                 if i not in have:
-                    c.execute(insert(t).values(**{**{k: v for k, v in (extra or {}).items() if k in t.c}, f1: key, f2: i}))
+                    c.execute(insert(t).values(**{**ex, f1: key, f2: i}))
+                elif ex and per:
+                    c.execute(update(t).where(t.c[f1] == key, t.c[f2] == i).values(**ex))
     return True
 
 
@@ -1436,6 +1449,13 @@ def _sess_flash_input(request, data):
     request.session.setdefault("_flash_new", {})["_input"] = dict(data or {})
     return True
 
+
+
+def _sess_back(request, data=None):
+    if data is not None:
+        _sess_flash_input(request, data)
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(request.headers.get("referer") or "/", status_code=302)
 
 def _sess_old(request, key, default=None):
     return (_sess_get(request, "_input", None) or {}).get(key, default)

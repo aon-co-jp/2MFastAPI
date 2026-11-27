@@ -192,3 +192,12 @@ Route::post('/form/flash', function (Request $request) {
 Route::get('/form/old', function () {
     return ['name' => old('name'), 'missing' => old('nope', 'dflt')];
 });
+
+Route::post('/users/{user}/roles-sync-granted', function (User $user) {
+    $user->roles()->sync([1 => ['granted_by' => 'sync'], 2 => ['granted_by' => 'sync2']]);
+    return ['ok' => true];
+});
+
+Route::post('/form/back', function (Request $request) {
+    return back()->withInput();
+});

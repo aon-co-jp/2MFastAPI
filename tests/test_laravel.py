@@ -21,7 +21,7 @@ def _app(out, monkeypatch=None):
 
 def test_counts(tmp_path, monkeypatch):
     ok, todo, _, _ = _app(tmp_path, monkeypatch)
-    assert (ok, todo) == (57, 2)
+    assert (ok, todo) == (59, 2)
 
 
 def test_routes(tmp_path, monkeypatch):
@@ -308,3 +308,15 @@ def test_flash_input_and_old(tmp_path, monkeypatch):
     assert c.post("/api/form/flash", json={"name": "Aoi"}).json() == {"flashed": True}
     assert c.get("/api/form/old").json() == {"name": "Aoi", "missing": "dflt"}     # next request only
     assert c.get("/api/form/old").json() == {"name": None, "missing": "dflt"}
+
+
+def test_assoc_sync_and_back_with_input(tmp_path, monkeypatch):
+    _, _, c, _ = _app(tmp_path, monkeypatch)
+    c.post("/photos", json={"name": "Aoi", "email": "a@example.test"})
+    c.post("/api/roles/seed")
+    assert c.post("/api/users/1/roles-sync-granted").json() == {"ok": True}
+    rows = [(r["user_id"], r["role_id"], r["granted_by"]) for r in c.get("/api/pivot").json() if r["user_id"] == 1]
+    assert sorted(rows) == [(1, 1, "sync"), (1, 2, "sync2")]
+    r = c.post("/api/form/back", json={"name": "kept"}, headers={"referer": "http://testserver/api/form/old"}, follow_redirects=False)
+    assert r.status_code == 302 and r.headers["location"].endswith("/api/form/old")
+    assert c.get("/api/form/old").json() is not None
