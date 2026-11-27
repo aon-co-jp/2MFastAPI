@@ -1,3 +1,3 @@
 source: aon-co-jp/2MFastAPI
-commit: f8a15cabc1856049f71cf6e924780e87b9650c78
-updated: 2026-11-27T05:41:05Z
+commit: 04362a9d0d3313f53008b08349f5a253ff310020
+updated: 2026-11-27T05:54:43Z
